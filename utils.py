@@ -173,7 +173,15 @@ def get_droplet_metrics(df: pd.DataFrame) -> dict:
     bottom_diameter = calculate_diameter_at_height(df, min_height)
     
     # Top diameter (op maximale hoogte)
+    # Voor holle druppels: zoek de diameter van het gat
     top_diameter = calculate_diameter_at_height(df, max_height)
+    
+    # Als de top diameter 0 is, betekent dit dat er een gat is
+    # Gebruik de cut_diameter als die beschikbaar is
+    if top_diameter == 0.0 and 'cut_diameter' in df.columns:
+        cut_diameter = df['cut_diameter'].iloc[0]
+        if cut_diameter is not None and cut_diameter > 0:
+            top_diameter = cut_diameter
     
     return {
         'volume': volume,

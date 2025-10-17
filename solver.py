@@ -125,6 +125,9 @@ def generate_droplet_shape(gamma_s: float, rho: float, g: float,
     # Maak DataFrame
     df = pd.DataFrame(data, columns=['B', 'C', 'z', 'x-x_0', 'h'])
     
+    # Voeg cut_diameter toe aan de DataFrame voor metrics berekening
+    df['cut_diameter'] = cut_diameter
+    
     # Pas afkapping toe indien gevraagd
     if cut_diameter is not None and cut_diameter > 0:
         # Afkapping op basis van diameter - maak een gat in de druppel

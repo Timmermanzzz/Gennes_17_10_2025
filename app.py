@@ -78,21 +78,46 @@ with col3:
 col4, col5 = st.columns([1, 1])
 
 with col4:
-    cut_percentage = st.slider(
-        "Afkap percentage (%)",
-        min_value=0,
-        max_value=50,
-        value=0,
-        step=1,
-        help="Percentage om van de bovenkant van de druppel af te knippen"
+    st.subheader("Vorm aanpassing")
+    
+    # Keuzemenu voor afkap methode
+    cut_method = st.selectbox(
+        "Afkap methode:",
+        ["Geen afkap", "Afkap percentage", "Afkap diameter"],
+        help="Kies hoe je de druppel wilt aanpassen"
     )
+    
+    if cut_method == "Afkap percentage":
+        cut_percentage = st.slider(
+            "Afkap percentage (%)",
+            min_value=0,
+            max_value=50,
+            value=0,
+            step=1,
+            help="Percentage om van de bovenkant van de druppel af te knippen"
+        )
+        cut_diameter = None
+    elif cut_method == "Afkap diameter":
+        cut_diameter = st.number_input(
+            "Afkap diameter (m)",
+            min_value=0.0,
+            max_value=50.0,
+            value=0.0,
+            step=0.1,
+            help="Diameter waarop de druppel wordt afgekapt"
+        )
+        cut_percentage = None
+    else:  # Geen afkap
+        cut_percentage = 0
+        cut_diameter = None
 
 with col5:
+    st.subheader("Actie")
     if st.button("🔬 Bereken Druppel", type="primary", use_container_width=True):
         with st.spinner("Berekening..."):
             try:
                 # Genereer druppelvorm
-                df = generate_droplet_shape(gamma_s, rho, g, cut_percentage)
+                df = generate_droplet_shape(gamma_s, rho, g, cut_percentage, cut_diameter)
                 
                 # Voeg x_shifted toe
                 df = shift_x_coordinates(df)

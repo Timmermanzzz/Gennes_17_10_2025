@@ -68,7 +68,7 @@ def _calculate_formula_local(z: float, kappa: float) -> float:
 
 
 def generate_droplet_shape(gamma_s: float, rho: float, g: float, 
-                           cut_percentage: float = 0.0, res_factor: float = 3.0) -> pd.DataFrame:
+                           cut_percentage: float = 0.0, cut_diameter: float = None, res_factor: float = 3.0) -> pd.DataFrame:
     """
     Genereer druppelvorm op basis van Young-Laplace vergelijking.
     
@@ -77,6 +77,7 @@ def generate_droplet_shape(gamma_s: float, rho: float, g: float,
         rho: Dichtheid (kg/m³)
         g: Gravitatieversnelling (m/s²)
         cut_percentage: Percentage om van de top af te knippen (0-100)
+        cut_diameter: Diameter waarop afgekapt wordt (m) - overschrijft cut_percentage
         res_factor: Resolutie factor voor aantal punten (hogere waarde = meer punten)
     
     Returns:
@@ -125,7 +126,50 @@ def generate_droplet_shape(gamma_s: float, rho: float, g: float,
     df = pd.DataFrame(data, columns=['B', 'C', 'z', 'x-x_0', 'h'])
     
     # Pas afkapping toe indien gevraagd
-    if cut_percentage > 0:
+    if cut_diameter is not None and cut_diameter > 0:
+        # Afkapping op basis van diameter
+        target_radius = cut_diameter / 2.0
+        
+        # Zoek de hoogte waar de radius gelijk is aan target_radius
+        df_temp = df.copy()
+        df_temp['radius'] = np.abs(df_temp['x-x_0'])
+        
+        # Zoek punten waar radius >= target_radius
+        valid_points = df_temp[df_temp['radius'] >= target_radius]
+        
+        if len(valid_points) > 0:
+            # Neem de hoogste hoogte waar radius >= target_radius
+            cut_at_height = valid_points['h'].max()
+            
+            
+            # Filter punten onder de afkap-hoogte
+            df_cut = df[df['h'] <= cut_at_height].copy()
+            
+            # Voeg punten toe op de afkap-hoogte voor vlakke bovenkant
+            x_values_at_cut = df[df['h'] >= cut_at_height]['x-x_0'].values
+            if len(x_values_at_cut) > 0:
+                min_x_at_cut = np.min(x_values_at_cut)
+                max_x_at_cut = np.max(x_values_at_cut)
+                n_points = 10
+                x_top = np.linspace(min_x_at_cut, max_x_at_cut, n_points)
+                
+                top_points = pd.DataFrame([{
+                    'B': 1.0,
+                    'C': 1.0,
+                    'z': H - cut_at_height,
+                    'x-x_0': x,
+                    'h': cut_at_height
+                } for x in x_top])
+                
+                df_cut = pd.concat([df_cut, top_points], ignore_index=True)
+            
+            return df_cut
+        else:
+            # Als target_radius te groot is, return de volledige druppel
+            return df
+    
+    elif cut_percentage > 0:
+        # Afkapping op basis van percentage (bestaande logica)
         max_height = df['h'].max()
         cut_at_height = max_height * (1.0 - cut_percentage / 100.0)
         df_cut = df[df['h'] <= cut_at_height].copy()

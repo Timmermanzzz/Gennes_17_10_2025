@@ -38,58 +38,16 @@ if 'metrics' not in st.session_state:
 if 'physical_params' not in st.session_state:
     st.session_state.physical_params = None
 
-# Compact Parameter Panel with contextual help
+# Compact Parameter Panel
 st.header("⚙️ Parameters")
 
-# Preset buttons for quick scenarios
-col_preset1, col_preset2, col_preset3, col_auto = st.columns([1, 1, 1, 1])
-
-with col_preset1:
-    if st.button("💧 Water", use_container_width=True):
-        st.session_state.preset = "water"
-        st.rerun()
-
-with col_preset2:
-    if st.button("🧂 Zoutwater", use_container_width=True):
-        st.session_state.preset = "saltwater"
-        st.rerun()
-
-with col_preset3:
-    if st.button("⚙️ Custom", use_container_width=True):
-        st.session_state.preset = "custom"
-        st.rerun()
-
+# Auto-update toggle
+col_auto, col_spacer = st.columns([1, 4])
 with col_auto:
     auto_update = st.toggle("Auto-update", value=True, help="Automatisch herberekenen bij parameter wijziging")
 
-# Add contextual help
-with st.expander("ℹ️ Parameter uitleg", expanded=False):
-    st.markdown("""
-    **Fysische Parameters:**
-    - **γₛ (Oppervlaktespanning)**: Trekt het oppervlak strak. Hogere waarde = stijvere druppel
-    - **ρ (Dichtheid)**: Gewicht van de vloeistof. Bepaalt hoe zwaar de druppel is
-    - **g (Zwaartekracht)**: Trekt de druppel naar beneden. Op aarde = 9.8 m/s²
-    
-    **Vorm Aanpassing:**
-    - **Afkap percentage**: Snijdt de bovenkant af voor open reservoirs (0% = volledige druppel)
-    
-    **Typische Waarden:**
-    - Water: γₛ=35000, ρ=1000, g=9.8
-    - Zoutwater: γₛ=40000, ρ=1200, g=9.8
-    - Maan: g=1.6 (andere parameters gelijk)
-    """)
-
-# Initialize preset values
-if 'preset' not in st.session_state:
-    st.session_state.preset = "water"
-
-# Set values based on preset
-if st.session_state.preset == "water":
-    default_gamma_s, default_rho, default_g = 35000.0, 1000.0, 9.8
-elif st.session_state.preset == "saltwater":
-    default_gamma_s, default_rho, default_g = 40000.0, 1200.0, 9.8
-else:  # custom
-    default_gamma_s, default_rho, default_g = 35000.0, 1000.0, 9.8
+# Default values
+default_gamma_s, default_rho, default_g = 35000.0, 1000.0, 9.8
 
 # Use form for controlled updates
 with st.form("parameters_form", clear_on_submit=False):

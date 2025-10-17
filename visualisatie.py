@@ -202,6 +202,20 @@ def create_metrics_table(metrics: dict, physical_params: dict) -> str:
     Returns:
         HTML string voor tabel weergave
     """
+    # Zorg voor veilige defaults
+    if metrics is None:
+        metrics = {}
+    if physical_params is None:
+        physical_params = {}
+    
+    # Helper functie voor veilige waarden
+    def safe_get(d, key, default=0):
+        try:
+            value = d.get(key, default)
+            return float(value) if value is not None else default
+        except (TypeError, ValueError):
+            return default
+    
     html = """
     <style>
         .metrics-table {
@@ -246,16 +260,16 @@ def create_metrics_table(metrics: dict, physical_params: dict) -> str:
         <tr><td>Top diameter</td><td>{top_diameter:.6f} m</td></tr>
     </table>
     """.format(
-        gamma_s=physical_params.get('gamma_s', 0),
-        rho=physical_params.get('rho', 0),
-        g=physical_params.get('g', 0),
-        kappa=physical_params.get('kappa', 0),
-        H=physical_params.get('H', 0),
-        volume=metrics.get('volume', 0),
-        max_height=metrics.get('max_height', 0),
-        max_diameter=metrics.get('max_diameter', 0),
-        bottom_diameter=metrics.get('bottom_diameter', 0),
-        top_diameter=metrics.get('top_diameter', 0)
+        gamma_s=safe_get(physical_params, 'gamma_s', 0),
+        rho=safe_get(physical_params, 'rho', 0),
+        g=safe_get(physical_params, 'g', 0),
+        kappa=safe_get(physical_params, 'kappa', 0),
+        H=safe_get(physical_params, 'H', 0),
+        volume=safe_get(metrics, 'volume', 0),
+        max_height=safe_get(metrics, 'max_height', 0),
+        max_diameter=safe_get(metrics, 'max_diameter', 0),
+        bottom_diameter=safe_get(metrics, 'bottom_diameter', 0),
+        top_diameter=safe_get(metrics, 'top_diameter', 0)
     )
     
     return html

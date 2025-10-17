@@ -123,36 +123,30 @@ if st.session_state.df is not None:
     
     with col1:
         st.metric(
-            label="Volume",
-            value=f"{st.session_state.metrics.get('volume', 0):.2f}",
-            help="m³"
+            label="Volume (m³)",
+            value=f"{st.session_state.metrics.get('volume', 0):.2f}"
         )
         st.metric(
-            label="Maximale hoogte",
-            value=f"{st.session_state.metrics.get('max_height', 0):.2f}",
-            help="m"
+            label="Maximale hoogte (m)",
+            value=f"{st.session_state.metrics.get('max_height', 0):.2f}"
         )
         st.metric(
-            label="Maximale diameter",
-            value=f"{st.session_state.metrics.get('max_diameter', 0):.2f}",
-            help="m"
+            label="Maximale diameter (m)",
+            value=f"{st.session_state.metrics.get('max_diameter', 0):.2f}"
         )
     
     with col2:
         st.metric(
-            label="Basis diameter",
-            value=f"{st.session_state.metrics.get('bottom_diameter', 0):.2f}",
-            help="m"
+            label="Basis diameter (m)",
+            value=f"{st.session_state.metrics.get('bottom_diameter', 0):.2f}"
         )
         st.metric(
-            label="Top diameter",
-            value=f"{st.session_state.metrics.get('top_diameter', 0):.2f}",
-            help="m"
+            label="Top diameter (m)",
+            value=f"{st.session_state.metrics.get('top_diameter', 0):.2f}"
         )
         st.metric(
-            label="Kappa (κ)",
-            value=f"{st.session_state.physical_params.get('kappa', 0):.4f}",
-            help="m⁻¹"
+            label="Kappa (m⁻¹)",
+            value=f"{st.session_state.physical_params.get('kappa', 0):.4f}"
         )
     
     st.markdown("---")

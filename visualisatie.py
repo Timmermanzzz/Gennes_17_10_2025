@@ -211,38 +211,55 @@ def create_metrics_table(metrics: dict, physical_params: dict) -> str:
     # Helper functie voor veilige waarden
     def safe_get(d, key, default=0):
         try:
+            if d is None:
+                return default
             value = d.get(key, default)
-            return float(value) if value is not None else default
-        except (TypeError, ValueError):
+            if value is None:
+                return default
+            return float(value)
+        except (TypeError, ValueError, AttributeError):
             return default
     
-    html = """
+    # Haal alle waarden op met veilige defaults
+    gamma_s = safe_get(physical_params, 'gamma_s', 0)
+    rho = safe_get(physical_params, 'rho', 0)
+    g = safe_get(physical_params, 'g', 0)
+    kappa = safe_get(physical_params, 'kappa', 0)
+    H = safe_get(physical_params, 'H', 0)
+    volume = safe_get(metrics, 'volume', 0)
+    max_height = safe_get(metrics, 'max_height', 0)
+    max_diameter = safe_get(metrics, 'max_diameter', 0)
+    bottom_diameter = safe_get(metrics, 'bottom_diameter', 0)
+    top_diameter = safe_get(metrics, 'top_diameter', 0)
+    
+    # Bouw HTML direct zonder .format() om KeyError te voorkomen
+    html = f"""
     <style>
-        .metrics-table {
+        .metrics-table {{
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             border-collapse: collapse;
             width: 100%;
             margin: 20px 0;
-        }
-        .metrics-table td {
+        }}
+        .metrics-table td {{
             padding: 10px;
             border-bottom: 1px solid #ddd;
-        }
-        .metrics-table td:first-child {
+        }}
+        .metrics-table td:first-child {{
             font-weight: bold;
             color: #2c3e50;
             width: 40%;
-        }
-        .metrics-table td:last-child {
+        }}
+        .metrics-table td:last-child {{
             color: #34495e;
             text-align: right;
-        }
-        .section-header {
+        }}
+        .section-header {{
             background-color: #3498db;
             color: white;
             font-weight: bold;
             padding: 10px;
-        }
+        }}
     </style>
     <table class="metrics-table">
         <tr><td colspan="2" class="section-header">Fysische Parameters</td></tr>
@@ -259,18 +276,7 @@ def create_metrics_table(metrics: dict, physical_params: dict) -> str:
         <tr><td>Basis diameter (bodem)</td><td>{bottom_diameter:.6f} m</td></tr>
         <tr><td>Top diameter</td><td>{top_diameter:.6f} m</td></tr>
     </table>
-    """.format(
-        gamma_s=safe_get(physical_params, 'gamma_s', 0),
-        rho=safe_get(physical_params, 'rho', 0),
-        g=safe_get(physical_params, 'g', 0),
-        kappa=safe_get(physical_params, 'kappa', 0),
-        H=safe_get(physical_params, 'H', 0),
-        volume=safe_get(metrics, 'volume', 0),
-        max_height=safe_get(metrics, 'max_height', 0),
-        max_diameter=safe_get(metrics, 'max_diameter', 0),
-        bottom_diameter=safe_get(metrics, 'bottom_diameter', 0),
-        top_diameter=safe_get(metrics, 'top_diameter', 0)
-    )
+    """
     
     return html
 

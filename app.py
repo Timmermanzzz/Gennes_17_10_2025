@@ -108,6 +108,44 @@ st.markdown("---")
 
 # Main content area - Single page layout
 if st.session_state.df is not None:
+    # Belangrijkste specs direct onder parameters
+    st.header("📊 Belangrijkste Specificaties")
+    
+    # Toon alleen de belangrijkste metrieken in een compacte layout
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        st.metric(
+            label="Volume",
+            value=f"{st.session_state.metrics.get('volume', 0):.2f} m³"
+        )
+    
+    with col2:
+        st.metric(
+            label="Maximale hoogte",
+            value=f"{st.session_state.metrics.get('max_height', 0):.2f} m"
+        )
+    
+    with col3:
+        st.metric(
+            label="Maximale diameter",
+            value=f"{st.session_state.metrics.get('max_diameter', 0):.2f} m"
+        )
+    
+    with col4:
+        st.metric(
+            label="Basis diameter",
+            value=f"{st.session_state.metrics.get('bottom_diameter', 0):.2f} m"
+        )
+    
+    with col5:
+        st.metric(
+            label="Top diameter",
+            value=f"{st.session_state.metrics.get('top_diameter', 0):.2f} m"
+        )
+    
+    st.markdown("---")
+    
     # 2D Visualisatie sectie
     st.header("📊 2D Visualisatie")
     st.subheader("Doorsnede van Druppelvorm")
@@ -123,10 +161,10 @@ if st.session_state.df is not None:
     
     st.markdown("---")
     
-    # Specificaties sectie
-    st.header("📋 Druppel Specificaties")
+    # Volledige specificaties sectie
+    st.header("📋 Volledige Specificaties")
     
-    # Toon metrics tabel
+    # Toon complete metrics tabel
     metrics_html = create_metrics_table(
         st.session_state.metrics,
         st.session_state.physical_params

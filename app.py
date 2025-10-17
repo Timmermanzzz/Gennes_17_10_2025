@@ -19,6 +19,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Initialize session state first
+if 'df' not in st.session_state:
+    st.session_state.df = None
+if 'metrics' not in st.session_state:
+    st.session_state.metrics = None
+if 'physical_params' not in st.session_state:
+    st.session_state.physical_params = None
+
 # Enhanced title with calculation parameters display
 st.title("💧 De Gennes Druppelvorm Calculator")
 st.markdown("*Gebaseerd op Young-Laplace natuurkundige principes*")
@@ -29,14 +37,6 @@ if st.session_state.df is not None and st.session_state.physical_params is not N
     st.caption(f"γₛ = {params.get('gamma_s', 0):.0f} N/m | ρ = {params.get('rho', 0):.0f} kg/m³ | g = {params.get('g', 0):.1f} m/s² | κ = {params.get('kappa', 0):.4f} m⁻¹")
 
 st.markdown("---")
-
-# Initialize session state
-if 'df' not in st.session_state:
-    st.session_state.df = None
-if 'metrics' not in st.session_state:
-    st.session_state.metrics = None
-if 'physical_params' not in st.session_state:
-    st.session_state.physical_params = None
 
 # Parameters bovenaan - altijd custom
 st.header("⚙️ Parameters")

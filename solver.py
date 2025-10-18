@@ -141,39 +141,38 @@ def generate_droplet_shape(gamma_s: float, rho: float, g: float,
             # Dit wordt afgehandeld in de app met een waarschuwing
             return df
         
-        # Zoek de hoogte waar de radius gelijk is aan target_radius
-        # Gebruik interpolatie voor precieze afkapping
-        from scipy import interpolate
+        # Eenvoudige aanpak: zoek de hoogte waar de radius exact target_radius is
+        # Sorteer op hoogte (van laag naar hoog)
+        df_sorted = df_temp.sort_values('h')
         
-        # Sorteer op radius voor interpolatie
-        df_sorted = df_temp.sort_values('radius')
+        # Zoek de hoogste hoogte waar radius <= target_radius
+        valid_points = df_sorted[df_sorted['radius'] <= target_radius]
         
-        if len(df_sorted) > 1:
-            # Interpoleer h als functie van radius
-            f_interp = interpolate.interp1d(df_sorted['radius'], df_sorted['h'], 
-                                          kind='linear', bounds_error=False, fill_value='extrapolate')
-            cut_at_height = float(f_interp(target_radius))
+        if len(valid_points) > 0:
+            # Neem de hoogste hoogte waar radius <= target_radius
+            cut_at_height = valid_points['h'].max()
             
             # Filter punten onder de afkap-hoogte
             df_cut = df[df['h'] <= cut_at_height].copy()
             
             # Voeg punten toe op de afkap-hoogte voor vlakke bovenkant
-            x_values_at_cut = df[df['h'] >= cut_at_height]['x-x_0'].values
-            if len(x_values_at_cut) > 0:
-                min_x_at_cut = np.min(x_values_at_cut)
-                max_x_at_cut = np.max(x_values_at_cut)
-                n_points = 10
-                x_top = np.linspace(min_x_at_cut, max_x_at_cut, n_points)
-                
-                top_points = pd.DataFrame([{
-                    'B': 1.0,
-                    'C': 1.0,
-                    'z': H - cut_at_height,
-                    'x-x_0': x,
-                    'h': cut_at_height
-                } for x in x_top])
-                
-                df_cut = pd.concat([df_cut, top_points], ignore_index=True)
+            # Maak een vlakke bovenkant met exact de target diameter (radius aan beide zijden)
+            n_points = 20
+            # target_radius is al half van de target_diameter
+            # dus we moeten linspace van -target_radius tot +target_radius maken
+            # dit geeft diameter van 2*target_radius
+            # CORRECT: x_top moet van -target_radius tot +target_radius gaan
+            x_top = np.linspace(-target_radius, target_radius, n_points)
+            
+            top_points = pd.DataFrame([{
+                'B': 1.0,
+                'C': 1.0,
+                'z': H - cut_at_height,
+                'x-x_0': x,
+                'h': cut_at_height
+            } for x in x_top])
+            
+            df_cut = pd.concat([df_cut, top_points], ignore_index=True)
             
             return df_cut
         

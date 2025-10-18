@@ -20,8 +20,10 @@ def shift_x_coordinates(df: pd.DataFrame) -> pd.DataFrame:
     if 'x-x_0' not in df.columns:
         return df
     
-    x_max = df['x-x_0'].max()
-    df['x_shifted'] = df['x-x_0'] - x_max
+    # x_shifted is gewoon de negatieve waarde van x-x_0 (spiegelen om y-as)
+    # Dit zorgt ervoor dat de linkerkant negatief is en rechterkant positief
+    df['x_shifted'] = -df['x-x_0']
+
     return df
 
 

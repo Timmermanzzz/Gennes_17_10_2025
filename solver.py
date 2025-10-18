@@ -145,15 +145,16 @@ def generate_droplet_shape(gamma_s: float, rho: float, g: float,
         # Sorteer op hoogte (van laag naar hoog)
         df_sorted = df_temp.sort_values('h')
         
-        # Zoek de hoogste hoogte waar radius <= target_radius
+        # Zoek de laagste hoogte waar radius <= target_radius
+        # Dit is waar we willen afkappen (we houden alles erboven)
         valid_points = df_sorted[df_sorted['radius'] <= target_radius]
         
         if len(valid_points) > 0:
-            # Neem de hoogste hoogte waar radius <= target_radius
-            cut_at_height = valid_points['h'].max()
+            # Neem de MINIMALE hoogte waar radius <= target_radius (dit is het afkappunt)
+            cut_at_height = valid_points['h'].min()
             
             # Filter punten onder de afkap-hoogte
-            df_cut = df[df['h'] <= cut_at_height].copy()
+            df_cut = df[df['h'] >= cut_at_height].copy()
             
             # Voeg punten toe op de afkap-hoogte voor vlakke bovenkant
             # Maak een vlakke bovenkant met exact de target diameter (radius aan beide zijden)

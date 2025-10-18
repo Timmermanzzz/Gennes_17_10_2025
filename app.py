@@ -107,6 +107,26 @@ with col4:
             help="Diameter waarop de druppel wordt afgekapt"
         )
         cut_percentage = None
+        
+        # Toon waarschuwing als diameter te groot is
+        if cut_diameter > 0:
+            # Bereken maximale diameter voor huidige parameters
+            try:
+                from solver import generate_droplet_shape
+                from utils import shift_x_coordinates, get_droplet_metrics
+                
+                # Genereer test druppel om maximale diameter te bepalen
+                test_df = generate_droplet_shape(gamma_s, rho, g, cut_percentage=0, cut_diameter=None)
+                test_df = shift_x_coordinates(test_df)
+                test_metrics = get_droplet_metrics(test_df)
+                max_possible_diameter = test_metrics.get('max_diameter', 0)
+                
+                if cut_diameter > max_possible_diameter:
+                    st.warning(f"⚠️ **Waarschuwing:** De ingevoerde diameter ({cut_diameter:.1f}m) is groter dan de maximale diameter van de druppel ({max_possible_diameter:.1f}m). De volledige druppel wordt getoond.")
+                    
+            except Exception as e:
+                # Als er een fout is, toon geen waarschuwing
+                pass
     else:  # Geen afkap
         cut_percentage = 0
         cut_diameter = None

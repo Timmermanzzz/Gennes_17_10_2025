@@ -130,17 +130,29 @@ def generate_droplet_shape(gamma_s: float, rho: float, g: float,
         # Afkapping op basis van diameter
         target_radius = cut_diameter / 2.0
         
-        # Zoek de hoogte waar de radius gelijk is aan target_radius
+        # Bereken maximale radius van de druppel
         df_temp = df.copy()
         df_temp['radius'] = np.abs(df_temp['x-x_0'])
+        max_radius = df_temp['radius'].max()
         
-        # Zoek punten waar radius >= target_radius
-        valid_points = df_temp[df_temp['radius'] >= target_radius]
+        # Controleer of target diameter realistisch is
+        if target_radius > max_radius:
+            # Target diameter is te groot - return de volledige druppel
+            # Dit wordt afgehandeld in de app met een waarschuwing
+            return df
         
-        if len(valid_points) > 0:
-            # Neem de hoogste hoogte waar radius >= target_radius
-            cut_at_height = valid_points['h'].max()
-            
+        # Zoek de hoogte waar de radius gelijk is aan target_radius
+        # Gebruik interpolatie voor precieze afkapping
+        from scipy import interpolate
+        
+        # Sorteer op radius voor interpolatie
+        df_sorted = df_temp.sort_values('radius')
+        
+        if len(df_sorted) > 1:
+            # Interpoleer h als functie van radius
+            f_interp = interpolate.interp1d(df_sorted['radius'], df_sorted['h'], 
+                                          kind='linear', bounds_error=False, fill_value='extrapolate')
+            cut_at_height = float(f_interp(target_radius))
             
             # Filter punten onder de afkap-hoogte
             df_cut = df[df['h'] <= cut_at_height].copy()
@@ -164,9 +176,9 @@ def generate_droplet_shape(gamma_s: float, rho: float, g: float,
                 df_cut = pd.concat([df_cut, top_points], ignore_index=True)
             
             return df_cut
-        else:
-            # Als target_radius te groot is, return de volledige druppel
-            return df
+        
+        # Fallback: return volledige druppel
+        return df
     
     elif cut_percentage > 0:
         # Afkapping op basis van percentage (bestaande logica)

@@ -125,51 +125,48 @@ def generate_droplet_shape(gamma_s: float, rho: float, g: float,
     # Maak DataFrame
     df = pd.DataFrame(data, columns=['B', 'C', 'z', 'x-x_0', 'h'])
     
-    # Voeg cut_diameter toe aan de DataFrame voor metrics berekening
-    df['cut_diameter'] = cut_diameter
-    
     # Pas afkapping toe indien gevraagd
     if cut_diameter is not None and cut_diameter > 0:
-        # Afkapping op basis van diameter - maak een gat in de druppel
+        # Afkapping op basis van diameter
         target_radius = cut_diameter / 2.0
         
-        # Filter alle punten waar de radius groter is dan target_radius
-        # Dit behoudt alleen de buitenkant van de druppel
-        df_cut = df[df['x-x_0'].abs() >= target_radius].copy()
+        # Zoek de hoogte waar de radius gelijk is aan target_radius
+        df_temp = df.copy()
+        df_temp['radius'] = np.abs(df_temp['x-x_0'])
         
-        # Voeg punten toe voor de vlakke bovenkant van het gat
-        # Zoek de maximale hoogte van de gefilterde punten
-        if not df_cut.empty:
-            max_height = df_cut['h'].max()
-            
-            # Voeg punten toe op de maximale hoogte voor de vlakke bovenkant
-            # Van -target_radius tot +target_radius (het gat)
-            n_points = 20
-            x_gap = np.linspace(-target_radius, target_radius, n_points)
-            
-            gap_points = pd.DataFrame([{
-                'B': 1.0,
-                'C': 1.0,
-                'z': H - max_height,
-                'x-x_0': x,
-                'h': max_height
-            } for x in x_gap])
-            
-            # Voeg ook punten toe voor de buitenste ring op dezelfde hoogte
-            max_radius = df_cut['x-x_0'].abs().max()
-            x_outer = np.linspace(-max_radius, max_radius, 40)
-            outer_points = pd.DataFrame([{
-                'B': 1.0,
-                'C': 1.0,
-                'z': H - max_height,
-                'x-x_0': x,
-                'h': max_height
-            } for x in x_outer if abs(x) >= target_radius])
-            
-            # Combineer alles
-            df_cut = pd.concat([df_cut, gap_points, outer_points], ignore_index=True)
+        # Zoek punten waar radius >= target_radius
+        valid_points = df_temp[df_temp['radius'] >= target_radius]
         
-        return df_cut
+        if len(valid_points) > 0:
+            # Neem de hoogste hoogte waar radius >= target_radius
+            cut_at_height = valid_points['h'].max()
+            
+            
+            # Filter punten onder de afkap-hoogte
+            df_cut = df[df['h'] <= cut_at_height].copy()
+            
+            # Voeg punten toe op de afkap-hoogte voor vlakke bovenkant
+            x_values_at_cut = df[df['h'] >= cut_at_height]['x-x_0'].values
+            if len(x_values_at_cut) > 0:
+                min_x_at_cut = np.min(x_values_at_cut)
+                max_x_at_cut = np.max(x_values_at_cut)
+                n_points = 10
+                x_top = np.linspace(min_x_at_cut, max_x_at_cut, n_points)
+                
+                top_points = pd.DataFrame([{
+                    'B': 1.0,
+                    'C': 1.0,
+                    'z': H - cut_at_height,
+                    'x-x_0': x,
+                    'h': cut_at_height
+                } for x in x_top])
+                
+                df_cut = pd.concat([df_cut, top_points], ignore_index=True)
+            
+            return df_cut
+        else:
+            # Als target_radius te groot is, return de volledige druppel
+            return df
     
     elif cut_percentage > 0:
         # Afkapping op basis van percentage (bestaande logica)

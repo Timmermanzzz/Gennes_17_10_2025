@@ -232,5 +232,3 @@ def get_physical_parameters(df: pd.DataFrame, gamma_s: float, rho: float, g: flo
         'rho': rho,
         'g': g
     }
-
--

@@ -186,7 +186,7 @@ if st.session_state.df is not None:
             value=f"{st.session_state.metrics.get('bottom_diameter', 0):.2f}"
         )
         st.metric(
-            label="Top diameter (m)",
+            label="Afkap diameter (m)",
             value=f"{st.session_state.metrics.get('top_diameter', 0):.2f}"
         )
         st.metric(

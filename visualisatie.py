@@ -274,7 +274,7 @@ def create_metrics_table(metrics: dict, physical_params: dict) -> str:
         <tr><td>Maximale hoogte</td><td>{max_height:.6f} m</td></tr>
         <tr><td>Maximale diameter</td><td>{max_diameter:.6f} m</td></tr>
         <tr><td>Basis diameter (bodem)</td><td>{bottom_diameter:.6f} m</td></tr>
-        <tr><td>Top diameter</td><td>{top_diameter:.6f} m</td></tr>
+        <tr><td>Afkap diameter</td><td>{top_diameter:.6f} m</td></tr>
     </table>
     """
     

@@ -186,3 +186,42 @@ def get_droplet_metrics(df: pd.DataFrame) -> dict:
         'top_diameter': top_diameter
     }
 
+
+def find_height_for_diameter(df: pd.DataFrame, target_diameter: float) -> float:
+    """
+    Vind de hoogte van het EERSTE/BOVENSTE punt waar een bepaalde diameter voorkomt.
+    Dit is belangrijk voor afkappen - we willen de opening op een specifieke diameter instellen.
+    
+    Parameters:
+        df: DataFrame met druppelvorm data (moet 'x_shifted' en 'h' kolommen hebben)
+        target_diameter: Gewenste diameter in meters
+    
+    Returns:
+        Hoogte van het eerste/bovenste punt waar deze diameter voorkomt
+    """
+    # Zorg dat x_shifted bestaat
+    if 'x_shifted' not in df.columns:
+        df = shift_x_coordinates(df)
+    
+    df_valid = df.dropna(subset=['x_shifted', 'h']).copy()
+    if df_valid.empty:
+        return np.nan
+    
+    # Sorteer op hoogte
+    df_valid = df_valid.sort_values('h')
+    
+    # Bereken diameters op alle hoogtes
+    df_valid['diameter'] = 2.0 * np.abs(df_valid['x_shifted'])
+    
+    # Tolerance voor matching
+    tolerance = target_diameter * 0.02  # 2% tolerantie
+    
+    # Vind ALLE punten die dicht bij de target diameter liggen
+    points_near_diameter = df_valid[np.abs(df_valid['diameter'] - target_diameter) < tolerance]
+    
+    if points_near_diameter.empty:
+        return np.nan
+    
+    # Pak het EERSTE/BOVENSTE punt (laagste h-waarde, want h loopt van hoog naar laag)
+    return points_near_diameter['h'].min()
+

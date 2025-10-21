@@ -17,8 +17,8 @@ $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $stdout = Join-Path $logDir ("streamlit_out_" + $timestamp + ".log")
 $stderr = Join-Path $logDir ("streamlit_err_" + $timestamp + ".log")
 
-# Launch Streamlit (uses .streamlit/config.toml)
-$arguments = '-m streamlit run app.py'
+# Launch Streamlit (uses .streamlit/config-local.toml for local development)
+$arguments = '-m streamlit run app.py --config .streamlit/config-local.toml'
 $proc = Start-Process -FilePath "python" -ArgumentList $arguments -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
 Write-Host "Started Streamlit (PID $($proc.Id)). Logs: `n $stdout `n $stderr"
 

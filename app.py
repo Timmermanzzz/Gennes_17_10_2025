@@ -143,6 +143,66 @@ with col4:
 
     # Kraag/torus instellingen
     st.subheader("Kraag / torus (optioneel)")
+    
+    # Info knop voor kraag methoden uitleg
+    if st.button("ℹ️ Kraag methoden", help="Klik voor uitleg over de verschillende kraag methoden"):
+        st.session_state.show_collar_explanation = not st.session_state.get('show_collar_explanation', False)
+    
+    # Toon uitleg als knop is ingedrukt
+    if st.session_state.get('show_collar_explanation', False):
+        with st.expander("🔬 Kraag Methoden - Fysica Uitleg", expanded=True):
+            st.markdown("""
+            **Het Probleem na Afkappen:**
+            Wanneer je een druppel afkapt, verlies je:
+            - **Hydrostatische druk** van de weggehaalde waterkolom  
+            - **Membraan spanning** van het weggehaalde zeildoek
+            
+            Dit zorgt ervoor dat de druppel niet meer de optimale Young-Laplace kromming heeft.
+            
+            **Wat Gebeurt Er Praktisch met de Vorm?**
+            Na afkappen zal de druppel **automatisch van vorm veranderen**:
+            - **Slanker worden** - minder bolling aan de zijkanten
+            - **Lager worden** - de totale hoogte neemt af
+            - **Minder volume** - door het weggehaalde deel
+            - **Verstoorde kromming** - niet meer de optimale druppelvorm
+            
+            **Waarom Dit Gebeurt:**
+            - **Minder hydrostatische druk** → membraan trekt minder uit
+            - **Minder watergewicht** → minder spanning op de wanden
+            - **Young-Laplace evenwicht** wordt verstoord
+            - **Resultaat:** druppel "krimpt" naar een nieuwe, minder optimale vorm
+            
+            **De Stijve Ring - Cruciaal Onderdeel:**
+            Bij het afkappen wordt een **stijve ring** (bijv. stalen koord) door de rand gehaald:
+            - **Opening diameter blijft vast** - kan niet rekken of krimpen
+            - **Membraan kan niet samentrekken** op de rand
+            - **Vorm verandering** gebeurt alleen in het vrije membraan
+            - **Zonder ring** zou de opening ook krimpen en de hele vorm instorten
+            
+            **De Oplossing - Kraag Methoden:**
+            
+            **Methode 1: Torus/Donut Kraag**
+            De torus herstelt de hydrostatische druk door:
+            - Een **waterkolom** toe te voegen die dezelfde druk geeft als het weggehaalde deel
+            - Het water in de torus staat **direct in verbinding** met het reservoir water
+            - **Geen membraan** tussen torus en reservoir
+            
+            **Hoe het Werkt:**
+            1. **Δh** = hoogte van weggehaalde waterkolom
+            2. **Torus waterkolom** = exact dezelfde hydrostatische druk
+            3. **Resultaat** = oorspronkelijke druppelkromming wordt hersteld
+            
+            **Praktisch:**
+            - **Donut vorm** rond de opening (opgeblazen met lucht)
+            - **Waterkanaal** in het midden voor de waterkolom
+            - **Flexibel** - kan klotsen opvangen
+            - **Efficiënt** - minimale waterhoeveelheid nodig
+            - **Herstelt** de oorspronkelijke optimale vorm
+            
+            **Methode 2: [Wordt toegevoegd]**
+            *Nieuwe methode in ontwikkeling...*
+            """)
+    
     extra_slosh_height = st.number_input("Extra kraaghoogte voor klotsen (m)", min_value=0.0, value=0.10, step=0.01, help="Extra vrije boord boven Δh.")
     # Wanddikte verwaarloosd volgens gebruiker (≈0). We houden r_water ≈ r_top.
     torus_wall_thickness = 0.0
@@ -438,27 +498,6 @@ if st.session_state.df is not None:
 else:
     # Welkomstscherm wanneer nog geen berekening is gedaan
     st.info("👆 Stel parameters hierboven in en klik op 'Bereken Druppel' om te beginnen.")
-    
-    # Voorbeeldafbeelding of instructies
-    st.markdown("""
-    ## Welkom bij de De Gennes Druppelvorm Calculator
-    
-    Deze applicatie helpt je bij het ontwerpen en visualiseren van druppelvormen 
-    op basis van natuurkundige principes.
-    
-    ### Snelstart:
-    1. **Stel fysische parameters in** hierboven (of gebruik de standaardwaarden)
-    2. **Pas eventueel het afkap percentage aan** voor een vlakke bovenkant
-    3. **Klik op 'Bereken Druppel'** om de vorm te genereren
-    4. **Bekijk de resultaten** direct op deze pagina
-    5. **Download STL/DXF** bestanden voor verder gebruik
-    
-    ### Standaardwaarden:
-    - γₛ = 35000 N/m (typisch voor water)
-    - ρ = 1000 kg/m³ (water)
-    - g = 9.8 m/s² (zwaartekracht op aarde)
-    - Afkap = 0% (volledige druppel)
-    """)
 
 # Footer
 st.markdown("---")

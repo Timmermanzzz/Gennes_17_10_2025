@@ -68,7 +68,7 @@ def _calculate_formula_local(z: float, kappa: float) -> float:
 
 
 def generate_droplet_shape(gamma_s: float, rho: float, g: float, 
-                           cut_percentage: float = 0.0, cut_diameter: float = None, res_factor: float = 3.0) -> pd.DataFrame:
+                           cut_percentage: float = 0.0, res_factor: float = 3.0) -> pd.DataFrame:
     """
     Genereer druppelvorm op basis van Young-Laplace vergelijking.
     
@@ -77,7 +77,6 @@ def generate_droplet_shape(gamma_s: float, rho: float, g: float,
         rho: Dichtheid (kg/m³)
         g: Gravitatieversnelling (m/s²)
         cut_percentage: Percentage om van de top af te knippen (0-100)
-        cut_diameter: Diameter waarop afgekapt wordt (m) - overschrijft cut_percentage
         res_factor: Resolutie factor voor aantal punten (hogere waarde = meer punten)
     
     Returns:
@@ -125,62 +124,12 @@ def generate_droplet_shape(gamma_s: float, rho: float, g: float,
     # Maak DataFrame
     df = pd.DataFrame(data, columns=['B', 'C', 'z', 'x-x_0', 'h'])
     
-    # Pas afkapping toe indien gevraagd
-    if cut_diameter is not None and cut_diameter > 0:
-        # Afkapping op basis van diameter
-        target_radius = cut_diameter / 2.0
-        
-        # Bereken maximale radius van de druppel
-        df_temp = df.copy()
-        df_temp['radius'] = np.abs(df_temp['x-x_0'])
-        max_radius = df_temp['radius'].max()
-        
-        # Controleer of target diameter realistisch is
-        if target_radius > max_radius:
-            # Target diameter is te groot - return de volledige druppel
-            # Dit wordt afgehandeld in de app met een waarschuwing
-            return df
-        
-        # Eenvoudige aanpak: zoek de hoogte waar de radius exact target_radius is
-        # Sorteer op hoogte (van laag naar hoog)
-        df_sorted = df_temp.sort_values('h')
-        
-        # Zoek de laagste hoogte waar radius <= target_radius
-        # Dit is waar we willen afkappen (we houden alles erboven)
-        valid_points = df_sorted[df_sorted['radius'] <= target_radius]
-        
-        if len(valid_points) > 0:
-            # Neem de MINIMALE hoogte waar radius <= target_radius (dit is het afkappunt)
-            cut_at_height = valid_points['h'].min()
-            
-            # Filter punten onder de afkap-hoogte
-            df_cut = df[df['h'] >= cut_at_height].copy()
-            
-            # Voeg punten toe op de afkap-hoogte voor vlakke bovenkant
-            # Maak een vlakke bovenkant met exact de target diameter (radius aan beide zijden)
-            n_points = 20
-            # target_radius is al half van de target_diameter
-            # dus we moeten linspace van -target_radius tot +target_radius maken
-            # dit geeft diameter van 2*target_radius
-            # CORRECT: x_top moet van -target_radius tot +target_radius gaan
-            x_top = np.linspace(-target_radius, target_radius, n_points)
-            
-            top_points = pd.DataFrame([{
-                'B': 1.0,
-                'C': 1.0,
-                'z': H - cut_at_height,
-                'x-x_0': x,
-                'h': cut_at_height
-            } for x in x_top])
-            
-            df_cut = pd.concat([df_cut, top_points], ignore_index=True)
-            
-            return df_cut
-        
-        # Fallback: return volledige druppel
-        return df
+    # Voeg x_shifted toe (rechterkant op 0, zoals in vergelijkbaar project)
+    x_max = df['x-x_0'].max()
+    df['x_shifted'] = df['x-x_0'] - x_max
     
-    elif cut_percentage > 0:
+    # Pas afkapping toe indien gevraagd
+    if cut_percentage > 0:
         # Afkapping op basis van percentage (bestaande logica)
         max_height = df['h'].max()
         cut_at_height = max_height * (1.0 - cut_percentage / 100.0)
@@ -199,6 +148,7 @@ def generate_droplet_shape(gamma_s: float, rho: float, g: float,
                 'C': 1.0,
                 'z': H - cut_at_height,
                 'x-x_0': x,
+                'x_shifted': x - x_max,
                 'h': cut_at_height
             } for x in x_top])
             

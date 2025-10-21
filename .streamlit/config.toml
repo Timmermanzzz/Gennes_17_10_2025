@@ -1,0 +1,12 @@
+[server]
+address = "127.0.0.1"
+port = 8599
+headless = true
+runOnSave = false
+
+[logger]
+level = "debug"
+messageFormat = "%(asctime)s %(levelname)s %(message)s"
+
+[browser]
+gatherUsageStats = false

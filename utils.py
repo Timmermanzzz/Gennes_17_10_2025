@@ -20,9 +20,9 @@ def shift_x_coordinates(df: pd.DataFrame) -> pd.DataFrame:
     if 'x-x_0' not in df.columns:
         return df
     
-    # x_shifted is gewoon de negatieve waarde van x-x_0 (spiegelen om y-as)
-    # Dit zorgt ervoor dat de linkerkant negatief is en rechterkant positief
-    df['x_shifted'] = -df['x-x_0']
+    # Zet rechterkant op 0 (zoals in het vergelijkbare project)
+    x_max = df['x-x_0'].max()
+    df['x_shifted'] = df['x-x_0'] - x_max
 
     return df
 
@@ -168,22 +168,24 @@ def get_droplet_metrics(df: pd.DataFrame) -> dict:
     min_height = df_valid['h'].min()
     max_height = df_valid['h'].max()
     
-    # Maximum diameter (grootste radius punt)
-    max_diameter = 2.0 * abs(df_valid['x_shifted'].min())
-    
-    # Bottom diameter (op minimale hoogte)
-    bottom_diameter = calculate_diameter_at_height(df, min_height)
-    
-    # Top diameter (op maximale hoogte)
-    top_diameter = calculate_diameter_at_height(df, max_height)
+    # Maximale diameter (volledige vorm): 2 * grootste radius over alle hoogtes
+    # Neem de grootste absolute waarde van x_shifted
+    widest_radius = float(np.max(np.abs(df_valid['x_shifted'])))
+    max_diameter = 2.0 * widest_radius
+
+    # Basis diameter (volledige vorm): diameter op de laagste hoogte (voet)
+    bottom_diameter = calculate_diameter_at_height(df_valid, min_height)
+
+    # Top diameter: diameter op de hoogste hoogte (opening na eventuele afkap)
+    top_diameter = calculate_diameter_at_height(df_valid, max_height)
     
     return {
         'volume': volume,
         'max_height': max_height,
         'min_height': min_height,
         'max_diameter': max_diameter,
-        'bottom_diameter': bottom_diameter,
-        'top_diameter': top_diameter
+        'bottom_diameter': bottom_diameter,  # = breedste plek (basis)
+        'top_diameter': top_diameter  # = opening (afkap)
     }
 
 
@@ -224,4 +226,179 @@ def find_height_for_diameter(df: pd.DataFrame, target_diameter: float) -> float:
     
     # Pak het EERSTE/BOVENSTE punt (laagste h-waarde, want h loopt van hoog naar laag)
     return points_near_diameter['h'].min()
+
+
+def _make_df_with_cuts(gamma_s: float, rho: float, g: float,
+                       cut_percentage: int = 0,
+                       cut_diameter: float = 0.0) -> pd.DataFrame:
+    """
+    Maak een druppel DataFrame met eventuele afkap (percentage of diameter).
+    """
+    from solver import generate_droplet_shape
+
+    if cut_diameter and cut_diameter > 0:
+        df_full = generate_droplet_shape(gamma_s, rho, g, cut_percentage=0)
+        h_cut = find_height_for_diameter(df_full, float(cut_diameter))
+        if np.isnan(h_cut):
+            return df_full
+        df = df_full[df_full['h'] <= h_cut].copy()
+        # Voeg vlakke top toe (alleen voor visualisatie/export)
+        target_radius = float(cut_diameter) / 2.0
+        n_points = 30
+        x_shifted_vals = np.linspace(-target_radius, target_radius, n_points)
+        x_max_current = df['x-x_0'].max() if 'x-x_0' in df.columns else 0.0
+        top_points = pd.DataFrame({
+            'B': 1.0,
+            'C': 1.0,
+            'z': 0.0,
+            'x-x_0': x_shifted_vals + x_max_current,
+            'x_shifted': x_shifted_vals,
+            'h': h_cut
+        })
+        df = pd.concat([df, top_points], ignore_index=True)
+        return df
+
+    # Percentage-afkap: ondersteund in solver
+    return generate_droplet_shape(gamma_s, rho, g, cut_percentage=int(cut_percentage or 0))
+
+
+def solve_gamma_for_volume(target_volume: float,
+                           rho: float,
+                           g: float,
+                           cut_percentage: int = 0,
+                           cut_diameter: float = 0.0,
+                           gamma_min: float = 100.0,
+                           gamma_max: float = 1_000_000.0,
+                           max_iter: int = 30,
+                           rel_tol: float = 1e-3) -> tuple:
+    """
+    Zoek gamma_s zodat het volume van de (eventueel afgekapte) druppel
+    gelijk wordt aan target_volume. Retourneert (gamma_opt, df_opt, volume_opt).
+    """
+    def volume_for_gamma(gamma_val: float):
+        df_local = _make_df_with_cuts(gamma_val, rho, g, cut_percentage, cut_diameter)
+        vol = calculate_volume(df_local)
+        return vol, df_local
+
+    vol_min, df_min = volume_for_gamma(gamma_min)
+    vol_max, df_max = volume_for_gamma(gamma_max)
+
+    # Bracketing uitbreiden indien nodig
+    expand = 0
+    while not (vol_min <= target_volume <= vol_max) and expand < 10:
+        if target_volume < vol_min:
+            gamma_min = max(1.0, gamma_min * 0.1)
+            vol_min, df_min = volume_for_gamma(gamma_min)
+        else:
+            gamma_max = gamma_max * 10.0
+            vol_max, df_max = volume_for_gamma(gamma_max)
+        expand += 1
+
+    if not (vol_min <= target_volume <= vol_max):
+        # kies dichtstbijzijnde
+        if abs(vol_min - target_volume) <= abs(vol_max - target_volume):
+            return gamma_min, df_min, vol_min
+        return gamma_max, df_max, vol_max
+
+    left, right = gamma_min, gamma_max
+    best_df, best_vol, best_gamma = df_min, vol_min, gamma_min
+    for _ in range(max_iter):
+        mid = 0.5 * (left + right)
+        vol_mid, df_mid = volume_for_gamma(mid)
+        if abs(vol_mid - target_volume) < abs(best_vol - target_volume):
+            best_df, best_vol, best_gamma = df_mid, vol_mid, mid
+        if target_volume > 0 and abs(vol_mid - target_volume)/target_volume < rel_tol:
+            return mid, df_mid, vol_mid
+        if vol_mid < target_volume:
+            left = mid
+        else:
+            right = mid
+
+    # eindresultaat
+    vol_opt, df_opt = volume_for_gamma(best_gamma)
+    return best_gamma, df_opt, vol_opt
+
+
+def solve_gamma_for_height(target_height: float,
+                           rho: float,
+                           g: float,
+                           cut_percentage: int = 0,
+                           cut_diameter: float = 0.0,
+                           gamma_min: float = 100.0,
+                           gamma_max: float = 1_000_000.0,
+                           max_iter: int = 30,
+                           rel_tol: float = 1e-3) -> tuple:
+    """
+    Zoek gamma_s zodat de maximale hoogte (na afkap) gelijk wordt aan target_height.
+    Retourneert (gamma_opt, df_opt, height_opt).
+    """
+    def height_for_gamma(gamma_val: float):
+        df_local = _make_df_with_cuts(gamma_val, rho, g, cut_percentage, cut_diameter)
+        if df_local is None or df_local.empty:
+            return np.nan, df_local
+        h = float(df_local['h'].max())
+        return h, df_local
+
+    h_min, df_min = height_for_gamma(gamma_min)
+    h_max, df_max = height_for_gamma(gamma_max)
+
+    # Bracketing uitbreiden indien nodig
+    expand = 0
+    while not (h_min <= target_height <= h_max) and expand < 10:
+        if target_height < h_min:
+            gamma_min = max(1.0, gamma_min * 0.1)
+            h_min, df_min = height_for_gamma(gamma_min)
+        else:
+            gamma_max = gamma_max * 10.0
+            h_max, df_max = height_for_gamma(gamma_max)
+        expand += 1
+
+    if not (h_min <= target_height <= h_max):
+        # kies dichtstbijzijnde
+        if abs(h_min - target_height) <= abs(h_max - target_height):
+            return gamma_min, df_min, h_min
+        return gamma_max, df_max, h_max
+
+    left, right = gamma_min, gamma_max
+    best_df, best_h, best_gamma = df_min, h_min, gamma_min
+    for _ in range(max_iter):
+        mid = 0.5 * (left + right)
+        h_mid, df_mid = height_for_gamma(mid)
+        if abs(h_mid - target_height) < abs(best_h - target_height):
+            best_df, best_h, best_gamma = df_mid, h_mid, mid
+        if target_height > 0 and abs(h_mid - target_height)/target_height < rel_tol:
+            return mid, df_mid, h_mid
+        # hoogte stijgt met gamma
+        if h_mid < target_height:
+            left = mid
+        else:
+            right = mid
+
+    h_opt, df_opt = height_for_gamma(best_gamma)
+    return best_gamma, df_opt, h_opt
+
+
+def compute_torus_from_head(opening_diameter: float,
+                            head_total: float,
+                            wall_thickness: float = 0.2,
+                            safety_freeboard: float = 0.0) -> dict:
+    """
+    Bepaal een eenvoudige torusgeometrie voor de kraag op basis van opening en gewenste waterhoogte.
+    Aannames: torus buiten op ring, kleine straal r_top; waterkanaal r_water = max(0, r_top - wall_thickness).
+    head_total = delta_h_water + safety_freeboard.
+    Retourneert: R_major, r_top, r_water, water_volume (m^3) als grove schatting (ringvormig kanaal).
+    """
+    R_major = opening_diameter / 2.0
+    # Kies r_top zodat er voldoende hoogte is voor head_total boven ring; eenvoudige keuze:
+    r_top = max(head_total, wall_thickness * 2.0) / 2.0 + wall_thickness  # marge
+    r_water = max(0.0, r_top - wall_thickness)
+    # Schatting waterkanaal-volume als dunne ring: V ≈ 2π^2 R_major r_water^2
+    water_volume = 2.0 * (np.pi ** 2) * R_major * (r_water ** 2)
+    return {
+        'R_major': R_major,
+        'r_top': r_top,
+        'r_water': r_water,
+        'head_total': head_total,
+        'water_volume': water_volume
+    }
 

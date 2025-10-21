@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 import numpy as np
 
 
-def create_2d_plot(df: pd.DataFrame, title: str = "Druppelvorm 2D Doorsnede") -> go.Figure:
+def create_2d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "Druppelvorm 2D Doorsnede") -> go.Figure:
     """
     Maak interactieve 2D doorsnede plot met Plotly.
     
@@ -20,8 +20,11 @@ def create_2d_plot(df: pd.DataFrame, title: str = "Druppelvorm 2D Doorsnede") ->
     """
     # Zorg dat x_shifted bestaat
     if 'x_shifted' not in df.columns and 'x-x_0' in df.columns:
+        # Centreer rond het midden: (min + max) / 2
+        x_min = df['x-x_0'].min()
         x_max = df['x-x_0'].max()
-        df['x_shifted'] = df['x-x_0'] - x_max
+        center = (x_min + x_max) / 2
+        df['x_shifted'] = df['x-x_0'] - center
     
     # Filter geldige data
     df_valid = df.dropna(subset=['x_shifted', 'h'])
@@ -49,10 +52,39 @@ def create_2d_plot(df: pd.DataFrame, title: str = "Druppelvorm 2D Doorsnede") ->
         y=df_sorted['h'],
         mode='lines+markers',
         name='Druppelprofiel',
-        line=dict(color='royalblue', width=2),
-        marker=dict(size=4, color='darkblue', opacity=0.6),
+        line=dict(color='red', width=3),
+        marker=dict(size=6, color='darkred', opacity=0.8),
         hovertemplate='<b>Radius:</b> %{x:.4f} m<br><b>Hoogte:</b> %{y:.4f} m<extra></extra>'
     ))
+
+    # Optionele seam- en kraag/donut-weergave op basis van metrics
+    if metrics is None:
+        metrics = {}
+    try:
+        seam_h = float(metrics.get('h_seam_eff', 0.0))
+        if seam_h > 0:
+            fig.add_hline(y=seam_h, line=dict(color='#60a5fa', width=1.5), annotation_text='Seam/top', annotation_position='top left')
+    except Exception:
+        pass
+
+    # Donut/torus in 2D (twee cirkels links/rechts)
+    try:
+        R_major = float(metrics.get('torus_R_major', 0.0))
+        r_top = float(metrics.get('torus_r_top', 0.0))
+        delta_h = float(metrics.get('delta_h_water', 0.0))
+        if R_major > 0 and r_top > 0 and seam_h > 0:
+            ring_z = seam_h - delta_h
+            zc_top = ring_z + r_top  # donut net boven de ring
+            th = np.linspace(0, 2*np.pi, 200)
+            # Links en rechts
+            x_left = -R_major + r_top * np.cos(th)
+            z_left = zc_top + r_top * np.sin(th)
+            x_right = R_major + r_top * np.cos(th)
+            z_right = zc_top + r_top * np.sin(th)
+            fig.add_trace(go.Scatter(x=x_left, y=z_left, mode='lines', name='Kraag (links)', line=dict(color='purple', width=1.5)))
+            fig.add_trace(go.Scatter(x=x_right, y=z_right, mode='lines', name='Kraag (rechts)', line=dict(color='purple', width=1.5)))
+    except Exception:
+        pass
     
     # Layout configuratie
     fig.update_layout(
@@ -110,7 +142,7 @@ def create_2d_plot(df: pd.DataFrame, title: str = "Druppelvorm 2D Doorsnede") ->
     return fig
 
 
-def create_3d_plot(df: pd.DataFrame, title: str = "Druppelvorm 3D Model", 
+def create_3d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "Druppelvorm 3D Model", 
                    n_theta: int = 60) -> go.Figure:
     """
     Maak interactieve 3D rotatiemodel met Plotly.
@@ -145,8 +177,13 @@ def create_3d_plot(df: pd.DataFrame, title: str = "Druppelvorm 3D Model",
     # Sorteer op hoogte
     df_sorted = df_valid.sort_values('h')
     
+    # Zorg dat x_shifted gecentreerd is rond 0 (symmetrisch)
+    x_shifted_vals = df_sorted['x_shifted'].values
+    x_center = (x_shifted_vals.max() + x_shifted_vals.min()) / 2
+    x_shifted_centered = x_shifted_vals - x_center
+    
     # Maak rotatie-oppervlak
-    r = np.abs(df_sorted['x_shifted'].to_numpy())
+    r = np.abs(x_shifted_centered)
     z = df_sorted['h'].to_numpy()
     theta = np.linspace(0, 2 * np.pi, n_theta)
     
@@ -156,7 +193,7 @@ def create_3d_plot(df: pd.DataFrame, title: str = "Druppelvorm 3D Model",
     X = R * np.cos(theta)
     Y = R * np.sin(theta)
     
-    # Maak 3D surface plot
+    # Maak 3D surface plot, sluit top af met een dunne extra schijf indien vlakke top aanwezig is
     fig = go.Figure(data=[go.Surface(
         x=X,
         y=Y,
@@ -165,7 +202,48 @@ def create_3d_plot(df: pd.DataFrame, title: str = "Druppelvorm 3D Model",
         showscale=True,
         hovertemplate='<b>X:</b> %{x:.4f} m<br><b>Y:</b> %{y:.4f} m<br><b>Z:</b> %{z:.4f} m<extra></extra>'
     )])
+
+    # Indien bovenaan een vlak niveau bestaat, teken extra "deksel" exact op de naad
+    # Detectie: groepeer op afgeronde hoogte en kies het hoogste niveau met >= 10 punten
+    z_rounded = np.round(z, 6)
+    unique_vals, counts = np.unique(z_rounded, return_counts=True)
+    candidate_levels = unique_vals[counts >= 10]
+    if candidate_levels.size > 0:
+        h_top = float(np.max(candidate_levels))
+        sel = np.isclose(z, h_top)
+        if np.any(sel):
+            # Radius op dit niveau uit gecentreerde r-vector
+            r_top = float(np.max(r[sel]))
+            if r_top > 0:
+                rr = np.linspace(0, r_top, 2)
+                TT, RR = np.meshgrid(theta, rr, indexing='xy')
+                Xcap = RR * np.cos(TT)
+                Ycap = RR * np.sin(TT)
+                # Plaats de deksel exact op de naad (minus kleine epsilon om z-fighting/zweven te voorkomen)
+                Zcap = np.full_like(Xcap, h_top - 1e-6)
+                fig.add_surface(x=Xcap, y=Ycap, z=Zcap, colorscale='Blues', showscale=False, opacity=0.95)
     
+    # Voeg 3D torus toe indien aanwezig
+    if metrics is None:
+        metrics = {}
+    try:
+        R_major = float(metrics.get('torus_R_major', 0.0))
+        r_top = float(metrics.get('torus_r_top', 0.0))
+        delta_h = float(metrics.get('delta_h_water', 0.0))
+        seam_h = float(metrics.get('h_seam_eff', 0.0))
+        if R_major > 0 and r_top > 0 and seam_h > 0:
+            ring_z = seam_h - delta_h
+            zc_top = ring_z + r_top
+            u = np.linspace(0, 2*np.pi, 50)
+            v = np.linspace(0, 2*np.pi, 30)
+            U, V = np.meshgrid(u, v)
+            X_t = (R_major + r_top*np.cos(V)) * np.cos(U)
+            Y_t = (R_major + r_top*np.cos(V)) * np.sin(U)
+            Z_t = zc_top + r_top*np.sin(V)
+            fig.add_surface(x=X_t, y=Y_t, z=Z_t, colorscale='Purples', showscale=False, opacity=0.6)
+    except Exception:
+        pass
+
     # Layout configuratie
     fig.update_layout(
         title={
@@ -178,7 +256,8 @@ def create_3d_plot(df: pd.DataFrame, title: str = "Druppelvorm 3D Model",
             xaxis_title="X (m)",
             yaxis_title="Y (m)",
             zaxis_title="Z (m) - Hoogte",
-            aspectmode='data',
+            # Forceer gelijke schaalverdeling op X/Y/Z om vertekening te voorkomen
+            aspectmode='cube',
             camera=dict(
                 eye=dict(x=1.5, y=1.5, z=1.2)
             )

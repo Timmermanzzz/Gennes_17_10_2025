@@ -402,3 +402,88 @@ def compute_torus_from_head(opening_diameter: float,
         'water_volume': water_volume
     }
 
+
+
+# =============================
+# Methode 2 helpers (krommingsmatching)
+# =============================
+
+def _fit_local_quadratic(h_vals: np.ndarray, r_vals: np.ndarray, h0: float) -> tuple:
+    """
+    Pas een lokale kwadratische fit r(h) = a h^2 + b h + c rond h0 toe en
+    retourneer (r, r', r'') geëvalueerd op h0.
+    """
+    if len(h_vals) >= 3:
+        # Center de data numeriek voor betere conditie
+        h_shift = h_vals - h0
+        coeffs = np.polyfit(h_shift, r_vals, 2)  # a, b, c in verschoven coördinaten
+        a, b, c = coeffs
+        r0 = a * 0.0**2 + b * 0.0 + c
+        r1 = 2.0 * a * 0.0 + b
+        r2 = 2.0 * a
+        return float(r0), float(r1), float(r2)
+    # Fallbacks
+    if len(h_vals) == 2:
+        # Lineaire schatting voor r, afgeleide; r'' ≈ 0
+        (h1, h2), (r1v, r2v) = h_vals, r_vals
+        if np.isclose(h2, h1):
+            return float(r1v), 0.0, 0.0
+        slope = (r2v - r1v) / (h2 - h1)
+        r_at_h0 = r1v + slope * (h0 - h1)
+        return float(r_at_h0), float(slope), 0.0
+    # Onvoldoende data
+    return float(r_vals[0]) if len(r_vals) else 0.0, 0.0, 0.0
+
+
+def estimate_mean_curvature_at_height(df: pd.DataFrame, height: float, k_neighbors: int = 7) -> float:
+    """
+    Schat de gemiddelde kromming H = (k1 + k2)/2 van de as-ronde vorm r(h)
+    op een specifieke hoogte met lokale polynoom-fit.
+
+    - k1 (meridionaal): r'' / (1 + r'^2)^(3/2)
+    - k2 (circulair):  1 / (r * sqrt(1 + r'^2))
+
+    Returns H (1/m). Absolute waarde wordt teruggegeven.
+    """
+    if df is None or df.empty:
+        return np.nan
+    if 'x_shifted' not in df.columns:
+        df = shift_x_coordinates(df.copy())
+
+    # Sorteer en kies k dichtstbijzijnde punten rond gewenste hoogte
+    df_sorted = df.dropna(subset=['x_shifted', 'h']).sort_values('h')
+    if df_sorted.empty:
+        return np.nan
+    df_sorted['dist'] = np.abs(df_sorted['h'] - float(height))
+    df_local = df_sorted.nsmallest(max(3, min(k_neighbors, len(df_sorted))), 'dist')
+
+    h_vals = df_local['h'].to_numpy(dtype=float)
+    r_vals = np.abs(df_local['x_shifted'].to_numpy(dtype=float))
+    r0, r1, r2 = _fit_local_quadratic(h_vals, r_vals, float(height))
+
+    denom = np.sqrt(1.0 + r1 * r1)
+    if denom <= 0.0 or r0 <= 1e-12:
+        return np.nan
+    k1 = r2 / (denom ** 3)
+    k2 = 1.0 / (r0 * denom)
+    H = 0.5 * (k1 + k2)
+    return float(abs(H))
+
+
+def curvature_from_head(delta_h: float, rho: float, g: float, gamma_s: float) -> float:
+    """
+    Equivalentie tussen drukhoofd en mean curvature via Young–Laplace.
+    Δp = ρ g Δh = 2 γₛ H ⇒ H = ρ g Δh / (2 γₛ)
+    """
+    if gamma_s <= 0:
+        return np.nan
+    return float((rho * g * max(0.0, delta_h)) / (2.0 * gamma_s))
+
+
+def delta_h_from_curvature(H_target: float, rho: float, g: float, gamma_s: float) -> float:
+    """
+    Omgekeerde relatie: Δh = 2 γₛ H_target / (ρ g)
+    """
+    if rho <= 0 or g <= 0:
+        return np.nan
+    return float((2.0 * gamma_s * max(0.0, H_target)) / (rho * g))

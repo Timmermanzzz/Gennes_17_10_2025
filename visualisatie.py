@@ -7,7 +7,16 @@ import plotly.graph_objects as go
 import numpy as np
 
 
-def create_2d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "Druppelvorm 2D Doorsnede") -> go.Figure:
+def create_2d_plot(
+    df: pd.DataFrame,
+    metrics: dict | None = None,
+    title: str = "Druppelvorm 2D Doorsnede",
+    view: str = "full",
+    show_seam: bool = False,
+    show_cut_plane: bool = False,
+    cut_plane_h: float | None = None,
+    show_torus_right: bool = False,
+) -> go.Figure:
     """
     Maak interactieve 2D doorsnede plot met Plotly.
     
@@ -18,16 +27,30 @@ def create_2d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "
     Returns:
         Plotly Figure object
     """
-    # Zorg dat x_shifted bestaat
-    if 'x_shifted' not in df.columns and 'x-x_0' in df.columns:
-        # Centreer rond het midden: (min + max) / 2
-        x_min = df['x-x_0'].min()
+    # Gebruik altijd een lokale gecentreerde as voor plotten om
+    # inconsistenties tussen 'x-x_0' en vooraf berekende 'x_shifted' te vermijden.
+    if 'x-x_0' in df.columns:
+        # Plaats rechterrand (max x) op 0: x_plot = x - x_max
         x_max = df['x-x_0'].max()
-        center = (x_min + x_max) / 2
-        df['x_shifted'] = df['x-x_0'] - center
+        x_plot = df['x-x_0'] - x_max
+    elif 'x_shifted' in df.columns:
+        # Fallback: verschuif bestaande kolom zodat rechterrand op 0 ligt
+        x_max = df['x_shifted'].max()
+        x_plot = df['x_shifted'] - x_max
+    else:
+        # Geen bruikbare x-informatie
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Geen x-coördinaten beschikbaar voor plot",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=16, color="red")
+        )
+        return fig
     
     # Filter geldige data
-    df_valid = df.dropna(subset=['x_shifted', 'h'])
+    df_all = pd.DataFrame({'x_plot': x_plot, 'h': df['h']})
+    df_valid = df_all.dropna(subset=['x_plot', 'h'])
     
     if df_valid.empty:
         # Lege plot als er geen data is
@@ -41,29 +64,83 @@ def create_2d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "
         return fig
     
     # Sorteer op hoogte voor mooie lijnen
-    df_sorted = df_valid.sort_values('h')
+    # Filter half-view indien gevraagd
+    if view == "half-left":
+        df_valid = df_valid[df_valid['x_plot'] <= 0]
+    elif view == "half-right":
+        df_valid = df_valid[df_valid['x_plot'] >= 0]
+
+    # Als er een expliciete afkaphoogte is, splits de top uit zodat de polyline niet
+    # via verticale segmenten naar de vlakke top gaat
+    cp_h_try = None
+    try:
+        cp_h_try = float(cut_plane_h if cut_plane_h is not None else metrics.get('h_cut', 0.0))
+    except Exception:
+        cp_h_try = None
+
+    df_body = df_valid
+    df_top = pd.DataFrame(columns=df_valid.columns)
+    if show_cut_plane and cp_h_try and cp_h_try > 0:
+        eps = 1e-4
+        # Body: strikt onder de afkaphoogte
+        df_body = df_valid[df_valid['h'] < (cp_h_try - eps)].copy()
+        # Bepaal de topradius R_top uit metrics of uit punten op de afkaphoogte
+        R_top = 0.0
+        try:
+            R_top = float(metrics.get('top_diameter', 0.0)) / 2.0 if metrics else 0.0
+        except Exception:
+            R_top = 0.0
+        # Fallback: haal radius uit data rond afkaphoogte
+        band = df_valid[(df_valid['h'] >= cp_h_try - eps) & (df_valid['h'] <= cp_h_try + eps)]
+        if not band.empty:
+            R_top = max(R_top, float(np.max(np.abs(band['x_plot']))))
+        # Construeer de vlakke top als aparte trace beperkt tot [-R_top, 0]
+        if R_top > 0:
+            x_top = np.linspace(-R_top, 0.0, 60)
+            df_top = pd.DataFrame({'x_plot': x_top, 'h': np.full_like(x_top, cp_h_try)})
+
+    # Teken body in oplopende hoogte (voorkomt horizontale overshoots)
+    df_sorted = df_body.sort_values('h')
+    df_top_sorted = df_top.sort_values('x_plot') if not df_top.empty else df_top
     
     # Maak de plot
     fig = go.Figure()
     
     # Voeg lijn toe voor profiel
     fig.add_trace(go.Scatter(
-        x=df_sorted['x_shifted'],
+        x=df_sorted['x_plot'],
         y=df_sorted['h'],
-        mode='lines+markers',
+        mode='lines',
         name='Druppelprofiel',
         line=dict(color='red', width=3),
-        marker=dict(size=6, color='darkred', opacity=0.8),
         hovertemplate='<b>Radius:</b> %{x:.4f} m<br><b>Hoogte:</b> %{y:.4f} m<extra></extra>'
     ))
+
+    if df_top_sorted is not None and not df_top_sorted.empty:
+        fig.add_trace(go.Scatter(
+            x=df_top_sorted['x_plot'],
+            y=df_top_sorted['h'],
+            mode='lines',
+            name='Druppelprofiel (top)',
+            line=dict(color='red', width=3),
+            hovertemplate='<b>Radius:</b> %{x:.4f} m<br><b>Hoogte:</b> %{y:.4f} m<extra></extra>'
+        ))
 
     # Optionele seam- en kraag/donut-weergave op basis van metrics
     if metrics is None:
         metrics = {}
     try:
         seam_h = float(metrics.get('h_seam_eff', 0.0))
-        if seam_h > 0:
+        if show_seam and seam_h > 0:
             fig.add_hline(y=seam_h, line=dict(color='#60a5fa', width=1.5), annotation_text='Seam/top', annotation_position='top left')
+    except Exception:
+        seam_h = 0.0
+
+    # Optionele cut-plane (afkaphoogte) weergave
+    try:
+        cp_h = float(cut_plane_h if cut_plane_h is not None else metrics.get('h_cut', 0.0))
+        if show_cut_plane and cp_h > 0:
+            fig.add_hline(y=cp_h, line=dict(color='#94a3b8', width=1, dash='dot'), annotation_text='Afkaphoogte', annotation_position='top left')
     except Exception:
         pass
 
@@ -72,17 +149,19 @@ def create_2d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "
         R_major = float(metrics.get('torus_R_major', 0.0))
         r_top = float(metrics.get('torus_r_top', 0.0))
         delta_h = float(metrics.get('delta_h_water', 0.0))
-        if R_major > 0 and r_top > 0 and seam_h > 0:
+        if R_major > 0 and r_top > 0 and (seam_h > 0 or (show_cut_plane and (cut_plane_h or metrics.get('h_cut', 0)))):
             ring_z = seam_h - delta_h
             zc_top = ring_z + r_top  # donut net boven de ring
             th = np.linspace(0, 2*np.pi, 200)
-            # Links en rechts
-            x_left = -R_major + r_top * np.cos(th)
-            z_left = zc_top + r_top * np.sin(th)
-            x_right = R_major + r_top * np.cos(th)
-            z_right = zc_top + r_top * np.sin(th)
-            fig.add_trace(go.Scatter(x=x_left, y=z_left, mode='lines', name='Kraag (links)', line=dict(color='purple', width=1.5)))
-            fig.add_trace(go.Scatter(x=x_right, y=z_right, mode='lines', name='Kraag (rechts)', line=dict(color='purple', width=1.5)))
+            # Links en/of rechts afhankelijk van view; standaard alleen links tonen
+            if view in ("full", "half-left"):
+                x_left = -R_major + r_top * np.cos(th)
+                z_left = zc_top + r_top * np.sin(th)
+                fig.add_trace(go.Scatter(x=x_left, y=z_left, mode='lines', name='Kraag (links)', line=dict(color='purple', width=1.5)))
+            if show_torus_right and view in ("full", "half-right"):
+                x_right = R_major + r_top * np.cos(th)
+                z_right = zc_top + r_top * np.sin(th)
+                fig.add_trace(go.Scatter(x=x_right, y=z_right, mode='lines', name='Kraag (rechts)', line=dict(color='purple', width=1.5)))
     except Exception:
         pass
     
@@ -94,7 +173,7 @@ def create_2d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "
             'xanchor': 'center',
             'font': {'size': 20, 'color': '#2c3e50'}
         },
-        xaxis_title="x (m) - Radius vanaf centrum",
+        xaxis_title="x (m) - 0 op rechterrand",
         yaxis_title="h (m) - Hoogte",
         hovermode='closest',
         template='plotly_white',
@@ -110,13 +189,16 @@ def create_2d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "
     )
     
     # Gelijke aspect ratio voor realistische weergave
-    x_range = df_sorted['x_shifted'].max() - df_sorted['x_shifted'].min()
-    y_range = df_sorted['h'].max() - df_sorted['h'].min()
+    x_range = df_sorted['x_plot'].max() - df_sorted['x_plot'].min()
+    y_range = max(df_sorted['h'].max(), df_top_sorted['h'].max() if not df_top_sorted.empty else df_sorted['h'].max()) - \
+              min(df_sorted['h'].min(), df_top_sorted['h'].min() if not df_top_sorted.empty else df_sorted['h'].min())
     
     # Zorg voor wat padding
     padding = 0.1
-    x_center = (df_sorted['x_shifted'].max() + df_sorted['x_shifted'].min()) / 2
-    y_center = (df_sorted['h'].max() + df_sorted['h'].min()) / 2
+    x_center = (df_sorted['x_plot'].max() + df_sorted['x_plot'].min()) / 2
+    y_max_all = max(df_sorted['h'].max(), df_top_sorted['h'].max() if not df_top_sorted.empty else df_sorted['h'].max())
+    y_min_all = min(df_sorted['h'].min(), df_top_sorted['h'].min() if not df_top_sorted.empty else df_sorted['h'].min())
+    y_center = (y_max_all + y_min_all) / 2
     
     max_range = max(x_range, y_range)
     

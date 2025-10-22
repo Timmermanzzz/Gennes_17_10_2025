@@ -189,43 +189,95 @@ def get_droplet_metrics(df: pd.DataFrame) -> dict:
     }
 
 
-def find_height_for_diameter(df: pd.DataFrame, target_diameter: float) -> float:
+def find_height_for_diameter(df: pd.DataFrame, target_diameter: float,
+                             search_points: int = 400,
+                             tol: float = 1e-4,
+                             max_iter: int = 60) -> float:
     """
-    Vind de hoogte van het EERSTE/BOVENSTE punt waar een bepaalde diameter voorkomt.
-    Dit is belangrijk voor afkappen - we willen de opening op een specifieke diameter instellen.
-    
-    Parameters:
-        df: DataFrame met druppelvorm data (moet 'x_shifted' en 'h' kolommen hebben)
-        target_diameter: Gewenste diameter in meters
-    
-    Returns:
-        Hoogte van het eerste/bovenste punt waar deze diameter voorkomt
+    Vind de afkaphoogte h_cut via bisection zodat diameter(h_cut) ≈ target_diameter.
+
+    Definities/keuzes:
+    - We zoeken de BOVENSTE snijhoogte (het eerst vanaf de top), d.w.z. de grootste h
+      waarvoor diameter(h) = target.
+    - We gebruiken een grove scan van h (van top naar bodem) om een bracket [h_lo,h_hi]
+      te vinden met een tekenwissel van f(h) = diameter(h) - target.
+    - Daarna verfijnen we via bisection binnen dat bracket.
+
+    Retourneert NaN wanneer target groter is dan de maximale diameter of als de vorm leeg is.
     """
-    # Zorg dat x_shifted bestaat
+    if df is None or df.empty or target_diameter <= 0:
+        return np.nan
+
+    # Zorg dat x_shifted bestaat (nodig voor diameterberekening)
     if 'x_shifted' not in df.columns:
-        df = shift_x_coordinates(df)
-    
+        df = shift_x_coordinates(df.copy())
+
     df_valid = df.dropna(subset=['x_shifted', 'h']).copy()
     if df_valid.empty:
         return np.nan
-    
-    # Sorteer op hoogte
-    df_valid = df_valid.sort_values('h')
-    
-    # Bereken diameters op alle hoogtes
-    df_valid['diameter'] = 2.0 * np.abs(df_valid['x_shifted'])
-    
-    # Tolerance voor matching
-    tolerance = target_diameter * 0.02  # 2% tolerantie
-    
-    # Vind ALLE punten die dicht bij de target diameter liggen
-    points_near_diameter = df_valid[np.abs(df_valid['diameter'] - target_diameter) < tolerance]
-    
-    if points_near_diameter.empty:
+
+    h_min = float(df_valid['h'].min())
+    h_max = float(df_valid['h'].max())
+
+    # Snel check: target haalbaar?
+    max_diam_possible = 2.0 * float(np.max(np.abs(df_valid['x_shifted'])))
+    if target_diameter > max_diam_possible + 1e-9:
         return np.nan
-    
-    # Pak het EERSTE/BOVENSTE punt (laagste h-waarde, want h loopt van hoog naar laag)
-    return points_near_diameter['h'].min()
+
+    def f(height: float) -> float:
+        return float(calculate_diameter_at_height(df_valid, height) - target_diameter)
+
+    # Scan van top naar beneden om het EERSTE (bovenste) bracket te vinden
+    hs = np.linspace(h_max, h_min, max(10, int(search_points)))
+    f_prev = f(hs[0])
+    bracket = None
+    for h in hs[1:]:
+        f_curr = f(h)
+        # We willen eerst punt vanaf top waar f van negatief naar positief gaat
+        if f_prev < 0.0 and f_curr >= 0.0:
+            bracket = (h, hs[list(hs).index(h) - 1]) if False else (h, hs[0])
+        if f_prev * f_curr <= 0.0:
+            bracket = (min(h, hs[0]), max(h, hs[0])) if False else (min(h, hs[0]), max(h, hs[0]))
+        # Eenvoudiger: onthoud het eerste interval waar teken wisselt tussen opeenvolgende punten
+        if (f_prev < 0.0 and f_curr >= 0.0) or (f_prev > 0.0 and f_curr <= 0.0):
+            h_hi = float(h)
+            h_lo = float(prev_h)  # prev_h komt zo
+            break
+        prev_h = h
+        f_prev = f_curr
+    else:
+        # Geen tekenwissel gevonden → probeer fallback: als f(h_max) al >=0 is, neem top
+        f_top = f(h_max)
+        if f_top >= 0.0:
+            return h_max
+        return np.nan
+
+    # Zorg dat h_lo < h_hi
+    if h_lo > h_hi:
+        h_lo, h_hi = h_hi, h_lo
+
+    # Bisection
+    f_lo = f(h_lo)
+    f_hi = f(h_hi)
+    # Voor zekerheid: als geen echte bracket, return hoogste waar f>=0 gevonden is
+    if f_lo * f_hi > 0.0:
+        return max([h for h in hs if f(h) >= 0.0] or [np.nan])
+
+    for _ in range(max_iter):
+        mid = 0.5 * (h_lo + h_hi)
+        f_mid = f(mid)
+        if abs(f_mid) < tol:
+            return mid
+        # Kies subinterval dat tekenwissel behoudt; we willen de hoogste oplossing,
+        # dus schuif de bovenkant naar mid als f(mid) > 0 (diameter te groot → ga omhoog)
+        if f_mid > 0.0:
+            h_hi = mid
+            f_hi = f_mid
+        else:
+            h_lo = mid
+            f_lo = f_mid
+
+    return 0.5 * (h_lo + h_hi)
 
 
 def _make_df_with_cuts(gamma_s: float, rho: float, g: float,

@@ -28,6 +28,34 @@ st.set_page_config(
 st.title("📊 Methode 1 — Druppelvorm Berekenen")
 st.markdown("Bereken druppelvormen met gegeven parameters en kies uw afkapopties.")
 
+# Uitleg/Help
+with st.expander("ℹ️ Uitleg — Hoe werkt Methode 1?", expanded=False):
+    st.markdown(
+        """
+        - **Doel**: Bepaal de druppelvorm uit evenwicht van **Young–Laplace** (De Gennes) met opgegeven materiaal- en vloeistofparameters.
+        - **Wat is γₛ?** Effectieve **membraanspanning** (N/m) in de huid. Geen E‑modulus en geen druk; het is de in‑vlak spanning per lengteeenheid die via **Δp = 2 γₛ H** de kromming bepaalt. Hogere γₛ ⇒ vlakker/strakker; lagere γₛ ⇒ ronder/boller.
+        - **Invoer**:
+          - **γₛ (N/m)**: membraanspanning/oppervlaktespanning
+          - **ρ (kg/m³)**: dichtheid van de vloeistof
+          - **g (m/s²)**: zwaartekracht
+        - **Wat gebeurt er bij afkappen?**
+          - Je snijdt de top open. Daardoor valt een deel van de **waterkolom** weg en verdwijnt een stuk **membraan**.
+          - Gevolg: de **hydrostatische druk** bovenin is lager en de **kromming** aan de rand verandert. De druppel wordt slanker/lager dan het gesloten origineel.
+        - **Hoe compenseren we dat? (kraag/torus)**
+          - We plaatsen een **stijve ring**: die houdt de opening (diameter) exact vast — dus het membraan kan daar niet naar binnen/buiten schuiven.
+          - We voegen een **kraag (donut/torus)** toe die we vullen met water tot een hoogte **Δh** boven de ring.
+          - Dat water staat in verbinding met het reservoir en levert weer **ρ g Δh** extra druk op de rand.
+          - Samen zorgt dit ervoor dat de **kromming aan de rand** weer overeenkomt met die van het **gesloten** reservoir op dezelfde hoogte.
+          - Kort: de ring **fixeert de geometrie** (diameter), het water in de kraag **herstelt de drukkolom**.
+        - **Afkapkeuzes**:
+          - **Geen**: volledige (gesloten) druppel
+          - **Afkap percentage**: snij top op een percentage van de hoogte
+          - **Afkap diameter**: stel een vaste opening in (diameter). We zoeken de bijbehorende **afkaphoogte** en tekenen een **vlak** deksel op die hoogte.
+        - **Eenheden**: lengte **m**, volume **m³**, γₛ **N/m**, ρ **kg/m³**, g **m/s²**.
+        - **Uitvoer**: volume, maximale hoogte, basisdiameter, maximale diameter, (eventuele) afkapdiameter en kraagkenmerken.
+        """
+    )
+
 # Initialize session state
 if 'df' not in st.session_state:
     st.session_state.df = None
@@ -163,7 +191,9 @@ with col5:
                                 'h': cut_at_height
                             })
                         top_points = pd.DataFrame(top_points_data)
-                        df = pd.concat([df, top_points], ignore_index=True).drop_duplicates(subset=['x_shifted', 'h'], keep='first').reset_index(drop=True)
+                        # Dedupliceer op ruwe x-kolom en hoogte zodat vlakke top een enkele lijn vormt
+                        subset_cols = ['x-x_0', 'h'] if 'x-x_0' in df.columns else ['x_shifted', 'h']
+                        df = pd.concat([df, top_points], ignore_index=True).drop_duplicates(subset=subset_cols, keep='first').reset_index(drop=True)
                         actual_cut_diameter = cut_diameter
                 
                 if use_percentage_mode and cut_percentage > 0:
@@ -217,6 +247,11 @@ with col5:
                 
                 metrics['delta_h_water'] = delta_h_water
                 metrics['h_seam_eff'] = seam_h if seam_h is not None else 0.0
+                # Bewaar afkaphoogte voor duidelijke visual (cut-plane)
+                if 'cut_h_final' in locals() and cut_h_final is not None and not np.isnan(cut_h_final):
+                    metrics['h_cut'] = float(cut_h_final)
+                else:
+                    metrics['h_cut'] = 0.0
                 
                 opening_diam_for_torus = None
                 if use_diameter_mode and (actual_cut_diameter is not None and actual_cut_diameter > 0):
@@ -284,7 +319,14 @@ if st.session_state.df is not None:
     
     st.markdown("---")
     st.header("📈 Visualisatie")
-    fig_2d = create_2d_plot(st.session_state.df, metrics=st.session_state.metrics)
+    fig_2d = create_2d_plot(
+        st.session_state.df,
+        metrics=st.session_state.metrics,
+        view="full",
+        show_seam=False,
+        show_cut_plane=True,
+        cut_plane_h=st.session_state.metrics.get('h_cut', None)
+    )
     st.plotly_chart(fig_2d, use_container_width=True)
     
     st.markdown("---")

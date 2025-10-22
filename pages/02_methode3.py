@@ -18,6 +18,7 @@ from utils import (
 from visualisatie import create_2d_plot
 from export import export_to_stl, export_to_dxf
 import tempfile
+from io import BytesIO
 
 st.set_page_config(
     page_title="Methode 3 - γₛ Optimalisatie",
@@ -27,6 +28,24 @@ st.set_page_config(
 
 st.title("🎯 Methode 3 — γₛ Optimalisatie")
 st.markdown("Voor gegeven afkap-diameter en kraaghoogte (Δh): vind de optimale membraanspanning (γₛ).")
+
+# Uitleg/Help
+with st.expander("ℹ️ Uitleg — Hoe werkt Methode 3?", expanded=False):
+    st.markdown(
+        """
+        - **Doel**: Zoek combinaties van **Δh** (kraaghoogte) en **γₛ** (membraanspanning) die de **kromming** van het gesloten reservoir terugbrengen bij een vaste **afkapdiameter**.
+        - **Wat is γₛ?** Effectieve **membraanspanning** (N/m). Het is geen stijfheid (E) en geen druk; het is de spanning per lengteeenheid die met **Δp = 2 γₛ H** de kromming bepaalt. Hoger γₛ ⇒ vlakker; lager γₛ ⇒ ronder.
+        - **Compensatieprincipe** (zoals bij Methode 1):
+          - De **stijve ring** fixeert de opening (diameter) nadat er is afgekap (membraan ontbreekt boven de ring).
+          - Het water in de **kraag** levert de ontbrekende **drukkolom**: extra druk **ρ g Δh** bij de rand.
+          - Met **γₛ** bepalen we hoe ‘strak’ het membraan staat: samen met de druk bepaalt dat de **kromming** (Young–Laplace: Δp = 2 γₛ H).
+        - **Werkwijze**:
+          1. Jij zet het **Δh-bereik** (en stap), en we berekenen voor elke Δh de bijbehorende **γₛ** die de referentiekromming oplevert.
+          2. Je krijgt een **tabel** (Δh, γₛ, volume, hoogte, etc.).
+          3. Kies een rij om de vorm te visualiseren en te exporteren.
+        - **Eenheden**: lengte **m**, volume **m³**, γₛ **N/m**, ρ **kg/m³**, g **m/s²**.
+        """
+    )
 
 # Initialize session state
 if 'solutions_table_m3' not in st.session_state:
@@ -173,7 +192,8 @@ if st.button("🔬 Genereer Oplossingen Tabel", type="primary", use_container_wi
                             'h': h_cut_test
                         })
                     top_points = pd.DataFrame(top_points_data)
-                    df_cut = pd.concat([df_cut, top_points], ignore_index=True)
+                    subset_cols = ['x-x_0', 'h'] if 'x-x_0' in df_cut.columns else ['x_shifted', 'h']
+                    df_cut = pd.concat([df_cut, top_points], ignore_index=True).drop_duplicates(subset=subset_cols, keep='first').reset_index(drop=True)
                     
                     # Bereken metrics
                     metrics = get_droplet_metrics(df_cut)
@@ -231,6 +251,33 @@ if st.session_state.solutions_table_m3 is not None:
     df_solutions = pd.DataFrame(solutions_display)
     
     st.dataframe(df_solutions, use_container_width=True, height=400)
+
+    # Export knoppen
+    col_exp_tbl_1, col_exp_tbl_2 = st.columns(2)
+    with col_exp_tbl_1:
+        csv_bytes = df_solutions.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download tabel (CSV)",
+            data=csv_bytes,
+            file_name="methode3_oplossingen.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+    with col_exp_tbl_2:
+        try:
+            bio = BytesIO()
+            with pd.ExcelWriter(bio) as writer:
+                df_solutions.to_excel(writer, index=False, sheet_name='oplossingen')
+            xlsx_data = bio.getvalue()
+            st.download_button(
+                label="📥 Download tabel (Excel)",
+                data=xlsx_data,
+                file_name="methode3_oplossingen.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        except Exception as _:
+            st.info("Excel-export niet beschikbaar (pakket ontbreekt). Gebruik CSV.")
     
     st.markdown("---")
     
@@ -276,7 +323,14 @@ if st.session_state.df_selected_m3 is not None:
     st.markdown("---")
     
     st.header("📈 Visualisatie")
-    fig_2d = create_2d_plot(st.session_state.df_selected_m3, metrics=st.session_state.metrics_selected_m3)
+    fig_2d = create_2d_plot(
+        st.session_state.df_selected_m3,
+        metrics=st.session_state.metrics_selected_m3,
+        view="full",
+        show_seam=False,
+        show_cut_plane=True,
+        cut_plane_h=st.session_state.selected_solution_m3.get('_h_cut', None)
+    )
     st.plotly_chart(fig_2d, use_container_width=True)
     
     st.markdown("---")

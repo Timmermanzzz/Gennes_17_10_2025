@@ -15,7 +15,7 @@ from utils import (
     compute_torus_from_head,
     calculate_diameter_at_height,
 )
-from visualisatie import create_2d_plot
+from visualisatie import create_2d_plot, create_3d_plot
 from export import export_to_stl, export_to_dxf
 import tempfile
 
@@ -180,7 +180,8 @@ with col5:
                         df = df[df['h'] <= cut_at_height].copy()
                         target_radius = cut_diameter / 2.0
                         n_points = 30
-                        x_shifted_vals = np.linspace(-target_radius, target_radius, n_points)
+                        # Plaats vlakke top aan de rechterkant [0, R] zodat deze naar rechts wijst
+                        x_shifted_vals = np.linspace(0.0, target_radius, n_points)
                         top_points_data = []
                         x_max_current = df['x-x_0'].max() if 'x-x_0' in df.columns else 0.0
                         for x_sh in x_shifted_vals:
@@ -319,6 +320,7 @@ if st.session_state.df is not None:
     
     st.markdown("---")
     st.header("📈 Visualisatie")
+    st.subheader("2D Doorsnede")
     fig_2d = create_2d_plot(
         st.session_state.df,
         metrics=st.session_state.metrics,
@@ -328,6 +330,14 @@ if st.session_state.df is not None:
         cut_plane_h=st.session_state.metrics.get('h_cut', None)
     )
     st.plotly_chart(fig_2d, use_container_width=True)
+    
+    st.subheader("3D Model")
+    fig_3d = create_3d_plot(
+        st.session_state.df,
+        metrics=st.session_state.metrics,
+        title="Druppelvorm 3D Model"
+    )
+    st.plotly_chart(fig_3d, use_container_width=True)
     
     st.markdown("---")
     st.header("💾 Export")

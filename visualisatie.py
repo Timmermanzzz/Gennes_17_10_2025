@@ -78,6 +78,8 @@ def create_2d_plot(
     except Exception:
         cp_h_try = None
 
+    # Gebruik x_plot direct; door de definitie x_plot = x - x_max ligt de rechterrand standaard op 0.
+
     df_body = df_valid
     df_top = pd.DataFrame(columns=df_valid.columns)
     if show_cut_plane and cp_h_try and cp_h_try > 0:
@@ -90,13 +92,25 @@ def create_2d_plot(
             R_top = float(metrics.get('top_diameter', 0.0)) / 2.0 if metrics else 0.0
         except Exception:
             R_top = 0.0
-        # Fallback: haal radius uit data rond afkaphoogte
+        # Fallback: haal radius en rechterrand uit data rond afkaphoogte
         band = df_valid[(df_valid['h'] >= cp_h_try - eps) & (df_valid['h'] <= cp_h_try + eps)]
         if not band.empty:
-            R_top = max(R_top, float(np.max(np.abs(band['x_plot']))))
-        # Construeer de vlakke top als aparte trace beperkt tot [-R_top, 0]
+            try:
+                x_right_edge_band = float(band['x_plot'].max())
+                x_left_edge_band = float(band['x_plot'].min())
+                # Radius = afstand tussen rechter- en linkerzijde binnen de band
+                R_est = max(0.0, x_right_edge_band - x_left_edge_band)
+                R_top = max(R_top, R_est)
+            except Exception:
+                pass
+        # Construeer de vlakke top als aparte trace verankerd aan de rechterrand
         if R_top > 0:
-            x_top = np.linspace(-R_top, 0.0, 60)
+            try:
+                x_right_edge = float(band['x_plot'].max()) if not band.empty else 0.0
+            except Exception:
+                x_right_edge = 0.0
+            # Teken de top links van de rechterrand: [x_right - R_top, x_right]
+            x_top = np.linspace(x_right_edge - R_top, x_right_edge, 60)
             df_top = pd.DataFrame({'x_plot': x_top, 'h': np.full_like(x_top, cp_h_try)})
 
     # Teken body in oplopende hoogte (voorkomt horizontale overshoots)
@@ -237,16 +251,27 @@ def create_3d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "
     Returns:
         Plotly Figure object
     """
-    # Zorg dat x_shifted bestaat
-    if 'x_shifted' not in df.columns and 'x-x_0' in df.columns:
+    # Hergebruik dezelfde x-constructie als bij 2D: plaats rechterrand (max x) op 0
+    if 'x-x_0' in df.columns:
         x_max = df['x-x_0'].max()
-        df['x_shifted'] = df['x-x_0'] - x_max
-    
-    # Filter geldige data
-    df_valid = df.dropna(subset=['x_shifted', 'h'])
-    
+        x_plot = df['x-x_0'] - x_max
+    elif 'x_shifted' in df.columns:
+        x_max = df['x_shifted'].max()
+        x_plot = df['x_shifted'] - x_max
+    else:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Geen x-coördinaten beschikbaar voor 3D-plot",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=16, color="red")
+        )
+        return fig
+
+    df_all = pd.DataFrame({'x_plot': x_plot, 'h': df['h']})
+    df_valid = df_all.dropna(subset=['x_plot', 'h'])
+
     if df_valid.empty:
-        # Lege plot als er geen data is
         fig = go.Figure()
         fig.add_annotation(
             text="Geen geldige data om te visualiseren",
@@ -255,17 +280,12 @@ def create_3d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "
             font=dict(size=16, color="red")
         )
         return fig
-    
+
     # Sorteer op hoogte
     df_sorted = df_valid.sort_values('h')
-    
-    # Zorg dat x_shifted gecentreerd is rond 0 (symmetrisch)
-    x_shifted_vals = df_sorted['x_shifted'].values
-    x_center = (x_shifted_vals.max() + x_shifted_vals.min()) / 2
-    x_shifted_centered = x_shifted_vals - x_center
-    
-    # Maak rotatie-oppervlak
-    r = np.abs(x_shifted_centered)
+
+    # Straal is de afstand tot de rotatie-as op x=0
+    r = np.abs(df_sorted['x_plot'].to_numpy())
     z = df_sorted['h'].to_numpy()
     theta = np.linspace(0, 2 * np.pi, n_theta)
     
@@ -338,8 +358,8 @@ def create_3d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "
             xaxis_title="X (m)",
             yaxis_title="Y (m)",
             zaxis_title="Z (m) - Hoogte",
-            # Forceer gelijke schaalverdeling op X/Y/Z om vertekening te voorkomen
-            aspectmode='cube',
+            # Forceer gelijke schaal per eenheid op X/Y/Z om vertekening te voorkomen
+            aspectmode='data',
             camera=dict(
                 eye=dict(x=1.5, y=1.5, z=1.2)
             )

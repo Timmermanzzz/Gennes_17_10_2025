@@ -15,7 +15,7 @@ from utils import (
     delta_h_from_curvature,
     compute_torus_from_head,
 )
-from visualisatie import create_2d_plot
+from visualisatie import create_2d_plot, create_3d_plot
 from export import export_to_stl, export_to_dxf
 import tempfile
 from io import BytesIO
@@ -181,7 +181,8 @@ if st.button("🔬 Genereer Oplossingen Tabel", type="primary", use_container_wi
                     # Voeg vlakke top toe
                     target_radius = cut_diameter_m3 / 2.0
                     n_points = 30
-                    x_shifted_vals = np.linspace(-target_radius, target_radius, n_points)
+                    # Plaats vlakke top aan de rechterkant [0, R] zodat deze naar rechts wijst
+                    x_shifted_vals = np.linspace(0.0, target_radius, n_points)
                     x_max_current = df_cut['x-x_0'].max() if 'x-x_0' in df_cut.columns else 0.0
                     top_points_data = []
                     for x_sh in x_shifted_vals:
@@ -206,6 +207,8 @@ if st.button("🔬 Genereer Oplossingen Tabel", type="primary", use_container_wi
                         wall_thickness=0.0,
                         safety_freeboard=float(extra_slosh_height)
                     )
+                    # Voor 2D-visualisatie van de torus (kraag) opslaan zoals bij Methode 1
+                    seam_h_eff = float(h_cut_test + dh)  # ringniveau + dh = naad/seam
                     
                     solutions.append({
                         'Δh (m)': round(dh, 4),
@@ -215,6 +218,13 @@ if st.button("🔬 Genereer Oplossingen Tabel", type="primary", use_container_wi
                         'Basis diameter (m)': round(metrics.get('bottom_diameter', 0), 2),
                         'Max diameter (m)': round(metrics.get('max_diameter', 0), 2),
                         'Torus water (m³)': round(torus_info.get('water_volume', 0), 2),
+                        # Torus/kraag geometrie- en weergavevelden voor 2D
+                        'torus_R_major': torus_info.get('R_major', 0.0),
+                        'torus_r_top': torus_info.get('r_top', 0.0),
+                        'torus_r_water': torus_info.get('r_water', 0.0),
+                        'torus_head_total': torus_info.get('head_total', 0.0),
+                        'delta_h_water': float(dh),
+                        'h_seam_eff': seam_h_eff,
                         '_df': df_cut,
                         '_gamma': gamma_needed,
                         '_h_cut': h_cut_test,
@@ -323,6 +333,7 @@ if st.session_state.df_selected_m3 is not None:
     st.markdown("---")
     
     st.header("📈 Visualisatie")
+    st.subheader("2D Doorsnede")
     fig_2d = create_2d_plot(
         st.session_state.df_selected_m3,
         metrics=st.session_state.metrics_selected_m3,
@@ -332,6 +343,14 @@ if st.session_state.df_selected_m3 is not None:
         cut_plane_h=st.session_state.selected_solution_m3.get('_h_cut', None)
     )
     st.plotly_chart(fig_2d, use_container_width=True)
+    
+    st.subheader("3D Model")
+    fig_3d = create_3d_plot(
+        st.session_state.df_selected_m3,
+        metrics=st.session_state.metrics_selected_m3,
+        title="Druppelvorm 3D Model"
+    )
+    st.plotly_chart(fig_3d, use_container_width=True)
     
     st.markdown("---")
     

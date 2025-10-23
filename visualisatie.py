@@ -147,6 +147,16 @@ def create_2d_plot(
         seam_h = float(metrics.get('h_seam_eff', 0.0))
         if show_seam and seam_h > 0:
             fig.add_hline(y=seam_h, line=dict(color='#60a5fa', width=1.5), annotation_text='Seam/top', annotation_position='top left')
+        # Waterhoogte (kraag) – toon als er kraag/water is ingesteld (delta_h_water > 0)
+        delta_h_water = float(metrics.get('delta_h_water', 0.0))
+        if delta_h_water > 0 and seam_h > 0:
+            water_h = seam_h  # water staat Δh boven de ring → zelfde niveau als seam
+            fig.add_hline(
+                y=water_h,
+                line=dict(color='#10b981', width=1.5, dash='dash'),
+                annotation_text='Waterhoogte (kraag)',
+                annotation_position='top right'
+            )
     except Exception:
         seam_h = 0.0
 

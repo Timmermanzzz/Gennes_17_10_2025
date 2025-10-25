@@ -1,5 +1,5 @@
 """
-Methode 1: Druppelvorm Berekenen
+Method 1: Compute Droplet Shape
 """
 
 import streamlit as st
@@ -14,45 +14,45 @@ from utils import (
     solve_gamma_for_height,
     compute_torus_from_head,
     calculate_diameter_at_height,
+    compute_collar_segment_volume,
+    find_delta_h_for_collar_volume,
 )
 from visualisatie import create_2d_plot, create_3d_plot
 from export import export_to_stl, export_to_dxf
 import tempfile
 
 st.set_page_config(
-    page_title="Methode 1 - Druppelvorm Berekenen",
+    page_title="Method 1 - Compute Droplet Shape",
     page_icon="📊",
     layout="wide"
 )
 
-st.title("📊 Methode 1 — Druppelvorm Berekenen")
-st.markdown("Bereken druppelvormen met gegeven parameters en kies uw afkapopties.")
+st.title("📊 Method 1 — Compute Droplet Shape")
+st.markdown("Compute droplet shapes for given parameters and choose your cut options.")
 
 # Uitleg/Help
-with st.expander("ℹ️ Uitleg — Hoe werkt Methode 1?", expanded=False):
+with st.expander("ℹ️ Help — How does Method 1 work?", expanded=False):
     st.markdown(
         """
-        - **Doel**: Bepaal de druppelvorm uit evenwicht van **Young–Laplace** (De Gennes) met opgegeven materiaal- en vloeistofparameters.
-        - **Wat is γₛ?** Effectieve **membraanspanning** (N/m) in de huid. Geen E‑modulus en geen druk; het is de in‑vlak spanning per lengteeenheid die via **Δp = 2 γₛ H** de kromming bepaalt. Hogere γₛ ⇒ vlakker/strakker; lagere γₛ ⇒ ronder/boller.
-        - **Invoer**:
-          - **γₛ (N/m)**: membraanspanning/oppervlaktespanning
-          - **ρ (kg/m³)**: dichtheid van de vloeistof
-          - **g (m/s²)**: zwaartekracht
-        - **Wat gebeurt er bij afkappen?**
-          - Je snijdt de top open. Daardoor valt een deel van de **waterkolom** weg en verdwijnt een stuk **membraan**.
-          - Gevolg: de **hydrostatische druk** bovenin is lager en de **kromming** aan de rand verandert. De druppel wordt slanker/lager dan het gesloten origineel.
-        - **Hoe compenseren we dat? (kraag/torus)**
-          - We plaatsen een **stijve ring**: die houdt de opening (diameter) exact vast — dus het membraan kan daar niet naar binnen/buiten schuiven.
-          - We voegen een **kraag (donut/torus)** toe die we vullen met water tot een hoogte **Δh** boven de ring.
-          - Dat water staat in verbinding met het reservoir en levert weer **ρ g Δh** extra druk op de rand.
-          - Samen zorgt dit ervoor dat de **kromming aan de rand** weer overeenkomt met die van het **gesloten** reservoir op dezelfde hoogte.
-          - Kort: de ring **fixeert de geometrie** (diameter), het water in de kraag **herstelt de drukkolom**.
-        - **Afkapkeuzes**:
-          - **Geen**: volledige (gesloten) druppel
-          - **Afkap percentage**: snij top op een percentage van de hoogte
-          - **Afkap diameter**: stel een vaste opening in (diameter). We zoeken de bijbehorende **afkaphoogte** en tekenen een **vlak** deksel op die hoogte.
-        - **Eenheden**: lengte **m**, volume **m³**, γₛ **N/m**, ρ **kg/m³**, g **m/s²**.
-        - **Uitvoer**: volume, maximale hoogte, basisdiameter, maximale diameter, (eventuele) afkapdiameter en kraagkenmerken.
+        - **Goal**: Solve the **Young–Laplace** (De Gennes) equilibrium droplet for given material and fluid parameters.
+        - **What is γₛ?** Effective **membrane tension** (N/m). Not E‑modulus, not pressure; the in‑plane tension that with **Δp = 2 γₛ H** sets curvature. Higher γₛ ⇒ flatter; lower γₛ ⇒ rounder.
+        - **Inputs**:
+          - **γₛ (N/m)**: membrane/surface tension
+          - **ρ (kg/m³)**: fluid density
+          - **g (m/s²)**: gravity
+        - **When cutting the top**:
+          - Opening removes part of the **water column** and some **membrane**.
+          - Result: lower **hydrostatic head** near the top and different edge curvature; the droplet becomes slimmer/lower than the closed one.
+        - **How we compensate (collar/torus)**
+          - A **rigid ring** fixes the opening diameter so the membrane cannot move there.
+          - A **collar (donut/torus)** is filled with water to **Δh** above the ring.
+          - This restores **ρ g Δh** pressure at the edge to match the closed reference curvature.
+        - **Cut options**:
+          - **None**: full (closed) droplet
+          - **Cut percentage**: slice off a percentage of the height
+          - **Cut diameter**: set a fixed opening (diameter). We find the **cut height** and draw a **flat** lid at that height.
+        - **Units**: length **m**, volume **m³**, γₛ **N/m**, ρ **kg/m³**, g **m/s²**.
+        - **Outputs**: volume, max height, base diameter, max diameter, opening diameter, and collar properties.
         """
     )
 
@@ -73,7 +73,7 @@ col1, col2, col3 = st.columns(3)
 
 with col1:
     gamma_s = st.number_input(
-        "γₛ - Oppervlaktespanning (N/m)",
+        "γₛ - Surface tension (N/m)",
         min_value=100.0,
         max_value=1000000.0,
         value=35000.0,
@@ -83,7 +83,7 @@ with col1:
 
 with col2:
     rho = st.number_input(
-        "ρ - Dichtheid (kg/m³)",
+        "ρ - Density (kg/m³)",
         min_value=1.0,
         max_value=10000.0,
         value=1000.0,
@@ -93,7 +93,7 @@ with col2:
 
 with col3:
     g = st.number_input(
-        "g - Zwaartekracht (m/s²)",
+        "g - Gravity (m/s²)",
         min_value=0.1,
         max_value=20.0,
         value=9.8,
@@ -105,20 +105,20 @@ with col3:
 col4, col5 = st.columns([1, 1])
 
 with col4:
-    st.subheader("Vorm aanpassing")
+    st.subheader("Shape adjustment")
     
     cut_method = st.selectbox(
-        "Afkap methode:",
-        ["Geen afkap", "Afkap percentage", "Afkap diameter"],
-        help="Kies hoe je de druppel wilt aanpassen"
+        "Cut method:",
+        ["No cut", "Cut percentage", "Cut diameter"],
+        help="Choose how you want to adjust the droplet"
     )
     
     use_diameter_mode = False
     use_percentage_mode = False
     
-    if cut_method == "Afkap percentage":
+    if cut_method == "Cut percentage":
         cut_percentage = st.slider(
-            "Afkap percentage (%)",
+            "Cut percentage (%)",
             min_value=0,
             max_value=50,
             value=0,
@@ -127,9 +127,9 @@ with col4:
         )
         cut_diameter = None
         use_percentage_mode = cut_percentage > 0
-    elif cut_method == "Afkap diameter":
+    elif cut_method == "Cut diameter":
         cut_diameter = st.number_input(
-            "Afkap diameter (m)",
+            "Cut diameter (m)",
             min_value=0.0,
             max_value=50.0,
             value=0.0,
@@ -143,27 +143,29 @@ with col4:
         cut_diameter = 0
     
     st.markdown("")
-    st.subheader("Constraints (optioneel)")
+    st.subheader("Constraints (optional)")
     col_c1, col_c2 = st.columns(2)
     with col_c1:
-        use_volume_constraint = st.toggle("Doelvolume afdwingen", value=False)
+        use_volume_constraint = st.toggle("Enforce target volume", value=False)
         target_volume = 0.0
         if use_volume_constraint:
-            target_volume = st.number_input("Doel volume (m³)", min_value=0.0, value=1000.0, step=10.0)
+            target_volume = st.number_input("Target volume (m³)", min_value=0.0, value=1000.0, step=10.0)
     with col_c2:
-        use_height_constraint = st.toggle("Doelhoogte afdwingen", value=False)
+        use_height_constraint = st.toggle("Enforce target height", value=False)
         target_height = 0.0
         if use_height_constraint:
-            target_height = st.number_input("Doel hoogte (m)", min_value=0.0, value=3.3, step=0.01)
+            target_height = st.number_input("Target height (m)", min_value=0.0, value=3.3, step=0.01)
     
     st.markdown("")
-    st.subheader("Kraag / torus (optioneel)")
-    extra_slosh_height = st.number_input("Extra kraaghoogte voor klotsen (m)", min_value=0.0, value=0.10, step=0.01)
+    st.subheader("Collar / torus (optional)")
+    extra_slosh_height = st.number_input("Extra collar height for sloshing (m)", min_value=0.0, value=0.10, step=0.01)
+    tube_diameter = st.number_input("Collar tube diameter (m)", min_value=0.0, value=0.50, step=0.01, help="Outer diameter of the collar tube")
+    tube_center_offset = st.number_input("Collar center offset (m)", min_value=0.0, value=0.0, step=0.01, help="Offset of tube center from ring edge")
 
 with col5:
-    st.subheader("Actie")
-    if st.button("🔬 Bereken Druppel", type="primary", use_container_width=True):
-        with st.spinner("Berekening..."):
+    st.subheader("Action")
+    if st.button("🔬 Compute Droplet", type="primary", use_container_width=True):
+        with st.spinner("Computing..."):
             try:
                 # Generate full droplet first
                 df_full = generate_droplet_shape(gamma_s, rho, g, cut_percentage=0)
@@ -174,10 +176,13 @@ with col5:
                 df = df_full.copy()
                 actual_cut_diameter = None
                 
+                df_before_top = None  # Bewaar voor volume berekening
                 if use_diameter_mode and cut_diameter > 0:
                     cut_at_height = find_height_for_diameter(df, cut_diameter)
                     if not np.isnan(cut_at_height):
                         df = df[df['h'] <= cut_at_height].copy()
+                        # Bewaar profiel VOOR top-toevoeging voor volume berekening
+                        df_before_top = df.copy()
                         target_radius = cut_diameter / 2.0
                         n_points = 30
                         # Plaats vlakke top aan de rechterkant [0, R] zodat deze naar rechts wijst
@@ -219,6 +224,9 @@ with col5:
                     )
                     df = df_opt
                     gamma_s = gamma_opt
+                    # Voor enforce height: df_opt bevat al een correct afgekapte vorm, geen extra top nodig
+                    if use_diameter_mode and cut_diam > 0:
+                        actual_cut_diameter = cut_diam
                 
                 df_full_final = generate_droplet_shape(gamma_s, rho, g, cut_percentage=0)
                 full_metrics_final = get_droplet_metrics(df_full_final)
@@ -262,7 +270,35 @@ with col5:
                         opening_diam_for_torus = float(calculate_diameter_at_height(df_full_final, cut_h_final))
                 
                 if opening_diam_for_torus is not None and delta_h_water > 0:
-                    head_total = float(delta_h_water) + float(extra_slosh_height)
+                    # NOUWEE LOGICA: volume_kraag moet exact gelijk zijn aan volume_afgekapt
+                    volume_full = full_metrics_final.get('volume', 0.0)
+                    # Gebruik df_before_top voor correcte volume berekening (zonder de toegevoegde top)
+                    if df_before_top is not None:
+                        metrics_before_top = get_droplet_metrics(df_before_top)
+                        volume_cut = metrics_before_top.get('volume', 0.0)
+                    else:
+                        volume_cut = metrics.get('volume', 0.0)
+                    volume_afgekapt = volume_full - volume_cut
+                    
+                    # Los Δh op zodat volume_kraag(Δh) = volume_afgekapt
+                    dh_result = find_delta_h_for_collar_volume(
+                        target_volume=volume_afgekapt,
+                        opening_diameter=opening_diam_for_torus,
+                        tube_diameter=float(tube_diameter),
+                        center_offset=float(tube_center_offset),
+                        tolerance=0.01,
+                        max_iter=100
+                    )
+                    
+                    # Update delta_h_water met de gevonden waarde
+                    if dh_result['converged']:
+                        delta_h_water = dh_result['delta_h']
+                        metrics['delta_h_water'] = delta_h_water
+                        head_total = float(delta_h_water) + float(extra_slosh_height)
+                    else:
+                        # Fallback naar oude logica als geen convergerende oplossing
+                        head_total = float(delta_h_water) + float(extra_slosh_height)
+                    
                     torus_info = compute_torus_from_head(opening_diameter=opening_diam_for_torus,
                                                          head_total=head_total,
                                                          wall_thickness=0.0,
@@ -272,55 +308,76 @@ with col5:
                     metrics['torus_r_water'] = torus_info['r_water']
                     metrics['torus_head_total'] = torus_info['head_total']
                     metrics['torus_water_volume'] = torus_info['water_volume']
+                    
+                    # Simple half‑torus displacement model (per user spec):
+                    # r = (Δh + sloshing)/2, R_major = opening_diameter/2, displaced = portion inside head region
+                    import math
+                    R_major = float(opening_diam_for_torus) / 2.0
+                    head_total_clean = float(delta_h_water) + float(extra_slosh_height)
+                    r_simple = head_total_clean / 2.0
+                    # Full torus volume
+                    v_torus_simple = 2.0 * (math.pi ** 2) * R_major * (r_simple ** 2)
+                    # Only the portion that sits in the head region (half‑torus) is displaced
+                    displaced_simple = 0.5 * v_torus_simple
+                    # Equivalent head volume A × Δh
+                    opening_area = float(np.pi) * (float(opening_diam_for_torus) / 2.0) ** 2
+                    eq_vol = opening_area * float(delta_h_water)
+                    metrics['equivalent_opening_volume'] = eq_vol
+                    metrics['head_volume_net'] = max(0.0, eq_vol - displaced_simple)
+                    metrics['volume_afgekapt'] = volume_afgekapt
+                    metrics['volume_kraag_match'] = dh_result['converged']
                 
                 st.session_state.df = df
                 st.session_state.metrics = metrics
                 st.session_state.physical_params = physical_params
                 
                 if use_diameter_mode and cut_diameter > 0:
-                    st.success(f"✅ Reservoir met {cut_diameter:.1f}m opening berekend!")
+                    st.success(f"✅ Reservoir with {cut_diameter:.1f} m opening computed!")
                 elif use_percentage_mode and cut_percentage > 0:
-                    st.success(f"✅ Reservoir met {int(cut_percentage)}% afkap berekend!")
+                    st.success(f"✅ Reservoir with {int(cut_percentage)}% cut computed!")
                 elif use_volume_constraint and target_volume > 0 and not use_height_constraint:
-                    st.success(f"✅ Doelvolume ≈ {target_volume:.1f} m³ gehaald!")
+                    st.success(f"✅ Target volume ≈ {target_volume:.1f} m³ achieved!")
                 elif use_height_constraint and target_height > 0:
-                    st.success(f"✅ Doelhoogte ≈ {target_height:.2f} m gehaald!")
+                    st.success(f"✅ Target height ≈ {target_height:.2f} m achieved!")
                 else:
-                    st.success("✅ Berekening succesvol!")
+                    st.success("✅ Computation successful!")
                 
             except Exception as e:
-                st.error(f"❌ Fout: {str(e)}")
+                st.error(f"❌ Error: {str(e)}")
 
 st.markdown("---")
 
 # Results
 if st.session_state.df is not None:
-    st.header("📊 Specificaties")
+    st.header("📊 Specifications")
     
     col1, col2 = st.columns(2)
     
     with col1:
         st.metric("Volume (m³)", f"{st.session_state.metrics.get('volume', 0):.2f}")
-        st.metric("Maximale hoogte (m)", f"{st.session_state.metrics.get('max_height', 0):.2f}")
-        st.metric("Maximale diameter (m)", f"{st.session_state.metrics.get('max_diameter', 0):.2f}")
+        st.metric("Max height (m)", f"{st.session_state.metrics.get('max_height', 0):.2f}")
+        st.metric("Max diameter (m)", f"{st.session_state.metrics.get('max_diameter', 0):.2f}")
     
     with col2:
-        st.metric("Basis diameter (m)", f"{st.session_state.metrics.get('bottom_diameter', 0):.2f}")
-        if cut_method != "Geen afkap":
-            st.metric("Afkap diameter (m)", f"{st.session_state.metrics.get('top_diameter', 0):.2f}")
+        st.metric("Base diameter (m)", f"{st.session_state.metrics.get('bottom_diameter', 0):.2f}")
+        if cut_method != "No cut":
+            st.metric("Opening diameter (m)", f"{st.session_state.metrics.get('top_diameter', 0):.2f}")
         else:
-            st.metric("Afkap diameter (m)", "-")
+            st.metric("Opening diameter (m)", "-")
         st.metric("γₛ (N/m)", f"{st.session_state.physical_params.get('gamma_s', 0):.0f}")
         
         if st.session_state.metrics.get('delta_h_water', 0) > 0:
-            st.metric("Benodigde Δh (m)", f"{st.session_state.metrics.get('delta_h_water', 0):.2f}")
+            st.metric("Required Δh (m)", f"{st.session_state.metrics.get('delta_h_water', 0):.2f}")
             if st.session_state.metrics.get('torus_head_total', 0) > 0:
-                st.metric("Totale kraaghoogte (m)", f"{st.session_state.metrics.get('torus_head_total', 0):.2f}")
-                st.metric("Torus water (m³)", f"{st.session_state.metrics.get('torus_water_volume', 0):.2f}")
+                st.metric("Total collar head (m)", f"{st.session_state.metrics.get('torus_head_total', 0):.2f}")
+                # Toon kraagvolume (moet gelijk zijn aan afgekapt volume)
+                volume_afgekapt = st.session_state.metrics.get('volume_afgekapt', 0)
+                if volume_afgekapt > 0:
+                    st.metric("Collar volume (m³)", f"{volume_afgekapt:.2f}")
     
     st.markdown("---")
-    st.header("📈 Visualisatie")
-    st.subheader("2D Doorsnede")
+    st.header("📈 Visualisation")
+    st.subheader("2D Cross-section")
     fig_2d = create_2d_plot(
         st.session_state.df,
         metrics=st.session_state.metrics,
@@ -335,7 +392,7 @@ if st.session_state.df is not None:
     fig_3d = create_3d_plot(
         st.session_state.df,
         metrics=st.session_state.metrics,
-        title="Druppelvorm 3D Model"
+        title="Droplet 3D Model"
     )
     st.plotly_chart(fig_3d, use_container_width=True)
     
@@ -354,7 +411,7 @@ if st.session_state.df is not None:
         
         stl_data = gen_stl()
         if stl_data:
-            st.download_button("📥 Download STL", data=stl_data, file_name="druppel.stl", mime="application/octet-stream", use_container_width=True)
+            st.download_button("📥 Download STL", data=stl_data, file_name="droplet.stl", mime="application/octet-stream", use_container_width=True)
     
     with col_exp2:
         def gen_dxf():
@@ -366,7 +423,7 @@ if st.session_state.df is not None:
         
         dxf_data = gen_dxf()
         if dxf_data:
-            st.download_button("📥 Download DXF", data=dxf_data, file_name="druppel.dxf", mime="application/dxf", use_container_width=True)
+            st.download_button("📥 Download DXF", data=dxf_data, file_name="droplet.dxf", mime="application/dxf", use_container_width=True)
 
 else:
-    st.info("👆 Stel parameters in en klik 'Bereken Druppel' om te beginnen.")
+    st.info("👆 Set parameters and click 'Compute Droplet' to begin.")

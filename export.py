@@ -1,5 +1,5 @@
 """
-Export functies voor STL en DXF bestanden.
+Export functions for STL and DXF files.
 """
 
 import numpy as np
@@ -11,14 +11,14 @@ import os
 
 def export_to_stl(df: pd.DataFrame, filepath: str) -> bool:
     """
-    Exporteer druppelvorm als STL bestand voor 3D-printen.
+    Export droplet shape as STL file for 3D printing.
     
     Parameters:
-        df: DataFrame met druppelvorm data (moet 'x_shifted' en 'h' kolommen hebben)
-        filepath: Pad naar output STL bestand
+        df: DataFrame with droplet data (must include 'x_shifted' and 'h')
+        filepath: Output STL file path
     
     Returns:
-        True als succesvol, False bij fout
+        True if successful, False on error
     """
     try:
         # Zorg dat x_shifted bestaat
@@ -29,7 +29,7 @@ def export_to_stl(df: pd.DataFrame, filepath: str) -> bool:
         # Filter en sorteer data
         df_valid = df.dropna(subset=['x_shifted', 'h'])
         if df_valid.empty:
-            raise ValueError("Geen geldige data om te exporteren")
+            raise ValueError("No valid data to export")
         
         df_sorted = df_valid.sort_values('h')
         
@@ -101,20 +101,20 @@ def export_to_stl(df: pd.DataFrame, filepath: str) -> bool:
         return True
     
     except Exception as e:
-        print(f"STL export fout: {e}")
+        print(f"STL export error: {e}")
         return False
 
 
 def export_to_dxf(df: pd.DataFrame, filepath: str) -> bool:
     """
-    Exporteer druppelvorm als DXF bestand voor CAD software.
+    Export droplet shape as DXF file for CAD.
     
     Parameters:
-        df: DataFrame met druppelvorm data (moet 'x_shifted' en 'h' kolommen hebben)
-        filepath: Pad naar output DXF bestand
+        df: DataFrame with droplet data (must include 'x_shifted' and 'h')
+        filepath: Output DXF file path
     
     Returns:
-        True als succesvol, False bij fout
+        True if successful, False on error
     """
     try:
         # Zorg dat x_shifted bestaat
@@ -125,7 +125,7 @@ def export_to_dxf(df: pd.DataFrame, filepath: str) -> bool:
         # Filter en sorteer data
         df_valid = df.dropna(subset=['x_shifted', 'h'])
         if df_valid.empty:
-            raise ValueError("Geen geldige data om te exporteren")
+            raise ValueError("No valid data to export")
         
         df_sorted = df_valid.sort_values('h')
         
@@ -148,21 +148,21 @@ def export_to_dxf(df: pd.DataFrame, filepath: str) -> bool:
         return True
     
     except Exception as e:
-        print(f"DXF export fout: {e}")
+        print(f"DXF export error: {e}")
         return False
 
 
 def get_export_filename(base_name: str, extension: str, output_dir: str = "exports") -> str:
     """
-    Genereer een unieke bestandsnaam voor export.
+    Generate a unique filename for export.
     
     Parameters:
-        base_name: Basis naam voor het bestand
-        extension: Bestandsextensie (.stl of .dxf)
+        base_name: Base name for the file
+        extension: File extension (.stl or .dxf)
         output_dir: Output directory
     
     Returns:
-        Volledig bestandspad
+        Full file path
     """
     from datetime import datetime
     
@@ -181,15 +181,15 @@ def get_export_filename(base_name: str, extension: str, output_dir: str = "expor
 def export_both_formats(df: pd.DataFrame, base_name: str = "druppel", 
                        output_dir: str = "exports") -> tuple:
     """
-    Exporteer druppelvorm in beide formaten (STL en DXF).
+    Export droplet shape in both formats (STL and DXF).
     
     Parameters:
-        df: DataFrame met druppelvorm data
-        base_name: Basis naam voor de bestanden
+        df: DataFrame with droplet data
+        base_name: Base name for the files
         output_dir: Output directory
     
     Returns:
-        Tuple van (stl_filepath, dxf_filepath, success)
+        Tuple of (stl_filepath, dxf_filepath, success)
     """
     # Genereer bestandsnamen
     stl_filepath = get_export_filename(base_name, ".stl", output_dir)

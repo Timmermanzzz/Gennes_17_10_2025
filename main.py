@@ -1,56 +1,56 @@
 """
-De Gennes Druppelvorm Calculator - Homepage
+De Gennes Droplet Shape Calculator - Homepage
 """
 
 import streamlit as st
 
 st.set_page_config(
-    page_title="De Gennes Druppelvorm Calculator",
+    page_title="De Gennes Droplet Shape Calculator",
     page_icon="💧",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-st.title("💧 De Gennes Druppelvorm Calculator")
-st.markdown("*Gebaseerd op Young-Laplace natuurkundige principes*")
+st.title("💧 De Gennes Droplet Shape Calculator")
+st.markdown("*Based on Young–Laplace physics*")
 
 st.markdown("---")
 
-st.header("🎯 Welkom!")
+st.header("🎯 Welcome!")
 
 st.markdown("""
-Dit gereedschap helpt je om druppelvormen te berekenen en optimaliseren op basis van fysische principes.
+This tool helps you compute and optimize droplet shapes using physical principles.
 
-### **Twee Methoden Beschikbaar:**
+### **Two Methods Available:**
 
-**📊 Methode 1: Druppelvorm Berekenen**
-- Bereken druppelvormen met gegeven parameters (γₛ, ρ, g)
-- Kies afkap-opties: percentage, diameter, of geen afkap
-- Voeg kraag/torus toe voor optimale herstelling
-- Exporteer als STL of DXF
+**📊 Method 1: Compute Droplet Shape**
+- Compute shapes from given parameters (γₛ, ρ, g)
+- Choose cut options: percentage, diameter, or no cut
+- Add collar/torus to restore boundary conditions
+- Export as STL or DXF
 
-**🎯 Methode 3: γₛ Optimalisatie**
-- Geef afkapdiameter op
-- App berekent optimale membraanspanning (γₛ)
-- Bepaal benodigde kraagvulling Δh
-- Vind de beste combinatie voor je ontwerp
+**🎯 Method 3: γₛ Optimization**
+- Specify cut diameter
+- App computes the optimal membrane tension (γₛ)
+- Determine required collar head Δh
+- Find the best combination for your design
 
 ---
 
-### **Hoe Gebruikt**
+### **How to Use**
 
-Kies een methode in het menu links (sidebar) en volg de instructies!
+Pick a method in the left sidebar and follow the instructions!
 """)
 
 st.markdown("---")
 
-st.info("👈 **Selecteer een methode in het menu links om te beginnen!**")
+st.info("👈 **Select a method in the left menu to get started!**")
 
 st.markdown("---")
 
 st.markdown(
     "<div style='text-align: center; color: gray; font-size: 12px;'>"
-    "De Gennes Druppelvorm Calculator | Gebaseerd op Young-Laplace natuurkunde"
+    "De Gennes Droplet Shape Calculator | Based on Young–Laplace physics"
     "</div>",
     unsafe_allow_html=True
 )

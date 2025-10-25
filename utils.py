@@ -455,6 +455,65 @@ def compute_torus_from_head(opening_diameter: float,
     }
 
 
+def compute_collar_segment_volume(
+    opening_diameter: float,
+    tube_diameter: float,
+    head_total: float,
+    center_offset: float = 0.0,
+) -> dict:
+    """
+    Exact water volume inside the collar (ring tube) using a circular segment model.
+
+    Parameters:
+        opening_diameter: Opening diameter at the ring (m)
+        tube_diameter: Tube outer diameter of the collar (m)
+        head_total: Target water head above the ring (Δh + sloshing) (m)
+        center_offset: Optional offset of the tube center away from the ring (m)
+
+    Returns dict with:
+        R_major: major radius of torus (m)
+        r_tube: tube radius (m)
+        h_fill: fill height inside the tube (0..2r) (m)
+        area_segment: filled cross-sectional area (m²)
+        volume_water: water volume in the collar (m³)
+    """
+    try:
+        R_major = float(opening_diameter) / 2.0 + float(center_offset)
+        r_tube = max(1e-9, float(tube_diameter) / 2.0)
+        # Clamp fill height to [0, 2r]
+        h_fill = max(0.0, min(float(head_total), 2.0 * r_tube))
+
+        # Circular segment area for a circle of radius r with segment height h
+        # A = r^2 * arccos((r-h)/r) - (r-h) * sqrt(2 r h - h^2)
+        import math
+        if h_fill <= 0.0:
+            A_seg = 0.0
+        elif h_fill >= 2.0 * r_tube:
+            A_seg = math.pi * r_tube * r_tube
+        else:
+            A_seg = (
+                r_tube * r_tube * math.acos((r_tube - h_fill) / r_tube)
+                - (r_tube - h_fill) * math.sqrt(max(0.0, 2.0 * r_tube * h_fill - h_fill * h_fill))
+            )
+
+        V = 2.0 * math.pi * R_major * A_seg
+        return {
+            'R_major': R_major,
+            'r_tube': r_tube,
+            'h_fill': h_fill,
+            'area_segment': A_seg,
+            'volume_water': V,
+        }
+    except Exception:
+        return {
+            'R_major': 0.0,
+            'r_tube': 0.0,
+            'h_fill': 0.0,
+            'area_segment': 0.0,
+            'volume_water': 0.0,
+        }
+
+
 
 # =============================
 # Methode 2 helpers (krommingsmatching)
@@ -539,3 +598,104 @@ def delta_h_from_curvature(H_target: float, rho: float, g: float, gamma_s: float
     if rho <= 0 or g <= 0:
         return np.nan
     return float((2.0 * gamma_s * max(0.0, H_target)) / (rho * g))
+
+
+def find_delta_h_for_collar_volume(
+    target_volume: float,
+    opening_diameter: float,
+    tube_diameter: float,
+    center_offset: float = 0.0,
+    tolerance: float = 0.01,
+    max_iter: int = 100
+) -> dict:
+    """
+    Los iteratief Δh op zodat volume_kraag(Δh) = target_volume.
+    
+    We gebruiken eenvoudige half-torus model: 
+    volume_kraag = 0.5 * 2π² R_major r², waarbij r = (Δh + sloshing)/2
+    
+    Parameters:
+        target_volume: Gewenst kraagvolume (m³)
+        opening_diameter: Diameter van de opening (m)
+        tube_diameter: Diameter van de kraag-buis (m)
+        center_offset: Offset van kraag-centrum t.o.v. opening (m)
+        tolerance: Acceptabele fout in volume (m³)
+        max_iter: Maximum aantal iteraties
+    
+    Returns:
+        dict met 'delta_h', 'volume_achieved', 'iterations', 'converged'
+    """
+    R_major = opening_diameter / 2.0 + center_offset
+    r_tube = tube_diameter / 2.0
+    
+    if R_major <= 0 or r_tube <= 0 or target_volume <= 0:
+        return {'delta_h': 0.0, 'volume_achieved': 0.0, 'iterations': 0, 'converged': False}
+    
+    # Start met eenvoudige schatting: volume ≈ 0.5 * 2π² R r² met r = Δh/2
+    # target_volume = 0.5 * 2π² R (Δh/2)² = π² R Δh²/2
+    # Δh = sqrt(2 * target_volume / (π² R))
+    dh_start = np.sqrt(2.0 * target_volume / (np.pi ** 2 * R_major))
+    
+    def calc_collar_volume(dh_test):
+        """Bereken kraagvolume voor gegeven Δh"""
+        # Als Δh groter is dan tube diameter, zit de tube vol
+        h_fill = min(dh_test, 2 * r_tube)
+        if h_fill <= 0:
+            return 0.0
+        
+        # Circular segment area
+        if h_fill >= 2 * r_tube:
+            segment_area = np.pi * r_tube**2
+        else:
+            arg = (r_tube - h_fill) / r_tube
+            arg = np.clip(arg, -1.0, 1.0)
+            segment_area = r_tube**2 * np.arccos(arg) - (r_tube - h_fill) * np.sqrt(2 * r_tube * h_fill - h_fill**2)
+        
+        # Volume van half-torus (alleen onder water)
+        volume = 0.5 * 2 * np.pi * R_major * segment_area
+        return volume
+    
+    # Iteratief oplossen met secant method
+    dh_lo = dh_start * 0.5
+    dh_hi = dh_start * 2.0
+    
+    # Bounds check
+    vol_lo = calc_collar_volume(dh_lo)
+    vol_hi = calc_collar_volume(dh_hi)
+    
+    if vol_lo > target_volume:
+        dh_lo = 0.0
+        vol_lo = 0.0
+    
+    if vol_hi < target_volume:
+        # Target volume te groot voor tube, maximaliseer
+        dh_hi = 2 * r_tube
+        vol_hi = calc_collar_volume(dh_hi)
+    
+    # Secant method
+    dh_prev = dh_lo
+    dh_curr = dh_hi
+    vol_prev = vol_lo
+    vol_curr = vol_hi
+    
+    for i in range(max_iter):
+        if abs(vol_curr - target_volume) < tolerance:
+            return {'delta_h': float(dh_curr), 'volume_achieved': float(vol_curr), 'iterations': i+1, 'converged': True}
+        
+        if abs(vol_curr - vol_prev) < 1e-10:
+            break
+        
+        # Secant step
+        dh_next = dh_curr - (vol_curr - target_volume) * (dh_curr - dh_prev) / (vol_curr - vol_prev)
+        
+        # Bounds
+        dh_next = max(0.0, min(dh_next, 2 * r_tube))
+        
+        vol_next = calc_collar_volume(dh_next)
+        
+        dh_prev = dh_curr
+        dh_curr = dh_next
+        vol_prev = vol_curr
+        vol_curr = vol_next
+    
+    return {'delta_h': float(dh_curr), 'volume_achieved': float(vol_curr), 'iterations': max_iter, 'converged': False}

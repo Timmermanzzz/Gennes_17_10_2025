@@ -1,5 +1,5 @@
 """
-Visualisatie functies voor druppelvormen met Plotly.
+Visualisation utilities for droplet shapes with Plotly.
 """
 
 import pandas as pd
@@ -10,7 +10,7 @@ import numpy as np
 def create_2d_plot(
     df: pd.DataFrame,
     metrics: dict | None = None,
-    title: str = "Druppelvorm 2D Doorsnede",
+    title: str = "Droplet 2D Cross-section",
     view: str = "full",
     show_seam: bool = False,
     show_cut_plane: bool = False,
@@ -18,11 +18,11 @@ def create_2d_plot(
     show_torus_right: bool = False,
 ) -> go.Figure:
     """
-    Maak interactieve 2D doorsnede plot met Plotly.
+    Create an interactive 2D cross-section plot with Plotly.
     
     Parameters:
-        df: DataFrame met druppelvorm data (moet 'x_shifted' en 'h' kolommen hebben)
-        title: Titel voor de plot
+        df: DataFrame containing droplet data (must include 'x_shifted' and 'h')
+        title: Plot title
     
     Returns:
         Plotly Figure object
@@ -41,7 +41,7 @@ def create_2d_plot(
         # Geen bruikbare x-informatie
         fig = go.Figure()
         fig.add_annotation(
-            text="Geen x-coördinaten beschikbaar voor plot",
+            text="No x-coordinates available for plot",
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False,
             font=dict(size=16, color="red")
@@ -56,7 +56,7 @@ def create_2d_plot(
         # Lege plot als er geen data is
         fig = go.Figure()
         fig.add_annotation(
-            text="Geen geldige data om te visualiseren",
+            text="No valid data to visualise",
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False,
             font=dict(size=16, color="red")
@@ -120,14 +120,14 @@ def create_2d_plot(
     # Maak de plot
     fig = go.Figure()
     
-    # Voeg lijn toe voor profiel
+    # Add profile line
     fig.add_trace(go.Scatter(
         x=df_sorted['x_plot'],
         y=df_sorted['h'],
         mode='lines',
-        name='Druppelprofiel',
+        name='Droplet profile',
         line=dict(color='red', width=3),
-        hovertemplate='<b>Radius:</b> %{x:.4f} m<br><b>Hoogte:</b> %{y:.4f} m<extra></extra>'
+        hovertemplate='<b>Radius:</b> %{x:.4f} m<br><b>Height:</b> %{y:.4f} m<extra></extra>'
     ))
 
     if df_top_sorted is not None and not df_top_sorted.empty:
@@ -135,9 +135,9 @@ def create_2d_plot(
             x=df_top_sorted['x_plot'],
             y=df_top_sorted['h'],
             mode='lines',
-            name='Druppelprofiel (top)',
+            name='Droplet profile (top)',
             line=dict(color='red', width=3),
-            hovertemplate='<b>Radius:</b> %{x:.4f} m<br><b>Hoogte:</b> %{y:.4f} m<extra></extra>'
+            hovertemplate='<b>Radius:</b> %{x:.4f} m<br><b>Height:</b> %{y:.4f} m<extra></extra>'
         ))
 
     # Optionele seam- en kraag/donut-weergave op basis van metrics
@@ -150,11 +150,11 @@ def create_2d_plot(
         # Waterhoogte (kraag) – toon als er kraag/water is ingesteld (delta_h_water > 0)
         delta_h_water = float(metrics.get('delta_h_water', 0.0))
         if delta_h_water > 0 and seam_h > 0:
-            water_h = seam_h  # water staat Δh boven de ring → zelfde niveau als seam
+            water_h = seam_h  # water level equals seam (Δh referenced at ring)
             fig.add_hline(
                 y=water_h,
                 line=dict(color='#10b981', width=1.5, dash='dash'),
-                annotation_text='Waterhoogte (kraag)',
+                annotation_text='Water level (collar)',
                 annotation_position='top right'
             )
     except Exception:
@@ -164,7 +164,7 @@ def create_2d_plot(
     try:
         cp_h = float(cut_plane_h if cut_plane_h is not None else metrics.get('h_cut', 0.0))
         if show_cut_plane and cp_h > 0:
-            fig.add_hline(y=cp_h, line=dict(color='#94a3b8', width=1, dash='dot'), annotation_text='Afkaphoogte', annotation_position='top left')
+            fig.add_hline(y=cp_h, line=dict(color='#94a3b8', width=1, dash='dot'), annotation_text='Cut height', annotation_position='top left')
     except Exception:
         pass
 
@@ -181,11 +181,11 @@ def create_2d_plot(
             if view in ("full", "half-left"):
                 x_left = -R_major + r_top * np.cos(th)
                 z_left = zc_top + r_top * np.sin(th)
-                fig.add_trace(go.Scatter(x=x_left, y=z_left, mode='lines', name='Kraag (links)', line=dict(color='purple', width=1.5)))
+                fig.add_trace(go.Scatter(x=x_left, y=z_left, mode='lines', name='Collar (left)', line=dict(color='purple', width=1.5)))
             if show_torus_right and view in ("full", "half-right"):
                 x_right = R_major + r_top * np.cos(th)
                 z_right = zc_top + r_top * np.sin(th)
-                fig.add_trace(go.Scatter(x=x_right, y=z_right, mode='lines', name='Kraag (rechts)', line=dict(color='purple', width=1.5)))
+                fig.add_trace(go.Scatter(x=x_right, y=z_right, mode='lines', name='Collar (right)', line=dict(color='purple', width=1.5)))
     except Exception:
         pass
     
@@ -197,8 +197,8 @@ def create_2d_plot(
             'xanchor': 'center',
             'font': {'size': 20, 'color': '#2c3e50'}
         },
-        xaxis_title="x (m) - 0 op rechterrand",
-        yaxis_title="h (m) - Hoogte",
+        xaxis_title="x (m) - 0 at right edge",
+        yaxis_title="h (m) - Height",
         hovermode='closest',
         template='plotly_white',
         width=800,
@@ -251,12 +251,12 @@ def create_2d_plot(
 def create_3d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "Druppelvorm 3D Model", 
                    n_theta: int = 60) -> go.Figure:
     """
-    Maak interactieve 3D rotatiemodel met Plotly.
+    Create an interactive 3D surface of revolution with Plotly.
     
     Parameters:
-        df: DataFrame met druppelvorm data (moet 'x_shifted' en 'h' kolommen hebben)
-        title: Titel voor de plot
-        n_theta: Aantal hoeken voor rotatie (hogere waarde = gladdere vorm)
+        df: DataFrame containing droplet data (must include 'x_shifted' and 'h')
+        title: Plot title
+        n_theta: Number of rotation angles (higher = smoother)
     
     Returns:
         Plotly Figure object
@@ -271,7 +271,7 @@ def create_3d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "
     else:
         fig = go.Figure()
         fig.add_annotation(
-            text="Geen x-coördinaten beschikbaar voor 3D-plot",
+            text="No x-coordinates available for 3D plot",
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False,
             font=dict(size=16, color="red")
@@ -284,7 +284,7 @@ def create_3d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "
     if df_valid.empty:
         fig = go.Figure()
         fig.add_annotation(
-            text="Geen geldige data om te visualiseren",
+            text="No valid data to visualise",
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False,
             font=dict(size=16, color="red")
@@ -312,7 +312,7 @@ def create_3d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "
         z=Z,
         colorscale='Blues',
         showscale=True,
-        hovertemplate='<b>X:</b> %{x:.4f} m<br><b>Y:</b> %{y:.4f} m<br><b>Z:</b> %{z:.4f} m<extra></extra>'
+        hovertemplate='<b>X:</b> %{x:.4f} m<br><b>Y:</b> %{y:.4f} m<br><b>Z (height):</b> %{z:.4f} m<extra></extra>'
     )])
 
     # Indien bovenaan een vlak niveau bestaat, teken extra "deksel" exact op de naad
@@ -367,7 +367,7 @@ def create_3d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "
         scene=dict(
             xaxis_title="X (m)",
             yaxis_title="Y (m)",
-            zaxis_title="Z (m) - Hoogte",
+            zaxis_title="Z (m) - Height",
             # Forceer gelijke schaal per eenheid op X/Y/Z om vertekening te voorkomen
             aspectmode='data',
             camera=dict(
@@ -384,14 +384,14 @@ def create_3d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "
 
 def create_metrics_table(metrics: dict, physical_params: dict) -> str:
     """
-    Creëer een geformatteerde HTML tabel met metrieken.
+    Create a formatted HTML table with metrics.
     
     Parameters:
-        metrics: Dictionary met druppel metrieken
-        physical_params: Dictionary met fysische parameters
+        metrics: Dictionary with droplet metrics
+        physical_params: Dictionary with physical parameters
     
     Returns:
-        HTML string voor tabel weergave
+        HTML string for table rendering
     """
     # Zorg voor veilige defaults
     if metrics is None:
@@ -423,7 +423,7 @@ def create_metrics_table(metrics: dict, physical_params: dict) -> str:
     bottom_diameter = safe_get(metrics, 'bottom_diameter', 0)
     top_diameter = safe_get(metrics, 'top_diameter', 0)
     
-    # Bouw HTML direct zonder .format() om KeyError te voorkomen
+    # Build HTML directly without .format() to avoid KeyError
     html = f"""
     <style>
         .metrics-table {{
@@ -453,19 +453,19 @@ def create_metrics_table(metrics: dict, physical_params: dict) -> str:
         }}
     </style>
     <table class="metrics-table">
-        <tr><td colspan="2" class="section-header">Fysische Parameters</td></tr>
-        <tr><td>γₛ (Oppervlaktespanning)</td><td>{gamma_s:.1f} N/m</td></tr>
-        <tr><td>ρ (Dichtheid)</td><td>{rho:.1f} kg/m³</td></tr>
-        <tr><td>g (Zwaartekracht)</td><td>{g:.2f} m/s²</td></tr>
+        <tr><td colspan="2" class="section-header">Physical Parameters</td></tr>
+        <tr><td>γₛ (Surface tension)</td><td>{gamma_s:.1f} N/m</td></tr>
+        <tr><td>ρ (Density)</td><td>{rho:.1f} kg/m³</td></tr>
+        <tr><td>g (Gravity)</td><td>{g:.2f} m/s²</td></tr>
         <tr><td>κ (Kappa)</td><td>{kappa:.6f} m⁻¹</td></tr>
-        <tr><td>H (Karakteristieke hoogte)</td><td>{H:.6f} m</td></tr>
+        <tr><td>H (Characteristic height)</td><td>{H:.6f} m</td></tr>
         
-        <tr><td colspan="2" class="section-header">Druppel Metrieken</td></tr>
+        <tr><td colspan="2" class="section-header">Droplet Metrics</td></tr>
         <tr><td>Volume</td><td>{volume:.6f} m³</td></tr>
-        <tr><td>Maximale hoogte</td><td>{max_height:.6f} m</td></tr>
-        <tr><td>Maximale diameter</td><td>{max_diameter:.6f} m</td></tr>
-        <tr><td>Basis diameter (bodem)</td><td>{bottom_diameter:.6f} m</td></tr>
-        <tr><td>Afkap diameter</td><td>{top_diameter:.6f} m</td></tr>
+        <tr><td>Max height</td><td>{max_height:.6f} m</td></tr>
+        <tr><td>Max diameter</td><td>{max_diameter:.6f} m</td></tr>
+        <tr><td>Base diameter</td><td>{bottom_diameter:.6f} m</td></tr>
+        <tr><td>Opening diameter</td><td>{top_diameter:.6f} m</td></tr>
     </table>
     """
     

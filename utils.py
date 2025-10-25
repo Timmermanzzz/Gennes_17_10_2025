@@ -231,6 +231,7 @@ def find_height_for_diameter(df: pd.DataFrame, target_diameter: float,
     hs = np.linspace(h_max, h_min, max(10, int(search_points)))
     f_prev = f(hs[0])
     bracket = None
+    prev_h = hs[0]
     for h in hs[1:]:
         f_curr = f(h)
         # We willen eerst punt vanaf top waar f van negatief naar positief gaat
@@ -241,7 +242,7 @@ def find_height_for_diameter(df: pd.DataFrame, target_diameter: float,
         # Eenvoudiger: onthoud het eerste interval waar teken wisselt tussen opeenvolgende punten
         if (f_prev < 0.0 and f_curr >= 0.0) or (f_prev > 0.0 and f_curr <= 0.0):
             h_hi = float(h)
-            h_lo = float(prev_h)  # prev_h komt zo
+            h_lo = float(prev_h)
             break
         prev_h = h
         f_prev = f_curr
@@ -496,13 +497,14 @@ def compute_collar_segment_volume(
                 - (r_tube - h_fill) * math.sqrt(max(0.0, 2.0 * r_tube * h_fill - h_fill * h_fill))
             )
 
-        V = 2.0 * math.pi * R_major * A_seg
+        # Volume van torus (full, niet half)
+        volume = 2 * np.pi * R_major * A_seg
         return {
             'R_major': R_major,
             'r_tube': r_tube,
             'h_fill': h_fill,
             'area_segment': A_seg,
-            'volume_water': V,
+            'volume_water': volume,
         }
     except Exception:
         return {
@@ -600,102 +602,207 @@ def delta_h_from_curvature(H_target: float, rho: float, g: float, gamma_s: float
     return float((2.0 * gamma_s * max(0.0, H_target)) / (rho * g))
 
 
-def find_delta_h_for_collar_volume(
+def find_collar_tube_diameter_for_volume(
     target_volume: float,
     opening_diameter: float,
-    tube_diameter: float,
+    delta_h_target: float = None,  # Deprecated, ignored
+    sloshing_height: float = 0.0,
     center_offset: float = 0.0,
     tolerance: float = 0.01,
     max_iter: int = 100
 ) -> dict:
     """
-    Los iteratief Δh op zodat volume_kraag(Δh) = target_volume.
+    VOLUME-BASED: Find tube diameter such that collar water volume = target_volume.
     
-    We gebruiken eenvoudige half-torus model: 
-    volume_kraag = 0.5 * 2π² R_major r², waarbij r = (Δh + sloshing)/2
+    Uses DIRECT ALGEBRAIC FORMULA (no bisection needed).
+    
+    Physics:
+    Water Volume = Opening Area × Water Height
+    Opening Area = π × (opening_diameter / 2)²
+    Water Height = tube_diameter - sloshing_height
+    
+    Solution:
+    tube_diameter = (target_volume / Opening_Area) + sloshing_height
     
     Parameters:
-        target_volume: Gewenst kraagvolume (m³)
-        opening_diameter: Diameter van de opening (m)
-        tube_diameter: Diameter van de kraag-buis (m)
-        center_offset: Offset van kraag-centrum t.o.v. opening (m)
-        tolerance: Acceptabele fout in volume (m³)
-        max_iter: Maximum aantal iteraties
+        target_volume: Water volume to achieve (m³)
+        opening_diameter: Collar/opening diameter (m)
+        sloshing_height: Extra unfilled height above water (m), default 0
+        center_offset: Unused (kept for compatibility)
+        tolerance: Unused (kept for compatibility)
+        max_iter: Unused (kept for compatibility)
     
     Returns:
-        dict met 'delta_h', 'volume_achieved', 'iterations', 'converged'
+        dict with:
+        - 'tube_diameter': Solution (m)
+        - 'volume_achieved': Volume at solution (m³)
+        - 'converged': Always True (direct solution)
+        - 'iterations': Always 1 (direct formula)
     """
-    R_major = opening_diameter / 2.0 + center_offset
-    r_tube = tube_diameter / 2.0
+    import math
     
-    if R_major <= 0 or r_tube <= 0 or target_volume <= 0:
-        return {'delta_h': 0.0, 'volume_achieved': 0.0, 'iterations': 0, 'converged': False}
-    
-    # Start met eenvoudige schatting: volume ≈ 0.5 * 2π² R r² met r = Δh/2
-    # target_volume = 0.5 * 2π² R (Δh/2)² = π² R Δh²/2
-    # Δh = sqrt(2 * target_volume / (π² R))
-    dh_start = np.sqrt(2.0 * target_volume / (np.pi ** 2 * R_major))
-    
-    def calc_collar_volume(dh_test):
-        """Bereken kraagvolume voor gegeven Δh"""
-        # Als Δh groter is dan tube diameter, zit de tube vol
-        h_fill = min(dh_test, 2 * r_tube)
-        if h_fill <= 0:
-            return 0.0
+    try:
+        # Collar opening area
+        R_ring = opening_diameter / 2.0
+        opening_area = math.pi * R_ring * R_ring
         
-        # Circular segment area
-        if h_fill >= 2 * r_tube:
-            segment_area = np.pi * r_tube**2
-        else:
-            arg = (r_tube - h_fill) / r_tube
-            arg = np.clip(arg, -1.0, 1.0)
-            segment_area = r_tube**2 * np.arccos(arg) - (r_tube - h_fill) * np.sqrt(2 * r_tube * h_fill - h_fill**2)
+        if opening_area <= 0 or target_volume <= 0:
+            return {'tube_diameter': 0.0, 'volume_achieved': 0.0, 'converged': False, 'iterations': 0}
         
-        # Volume van half-torus (alleen onder water)
-        volume = 0.5 * 2 * np.pi * R_major * segment_area
-        return volume
-    
-    # Iteratief oplossen met secant method
-    dh_lo = dh_start * 0.5
-    dh_hi = dh_start * 2.0
-    
-    # Bounds check
-    vol_lo = calc_collar_volume(dh_lo)
-    vol_hi = calc_collar_volume(dh_hi)
-    
-    if vol_lo > target_volume:
-        dh_lo = 0.0
-        vol_lo = 0.0
-    
-    if vol_hi < target_volume:
-        # Target volume te groot voor tube, maximaliseer
-        dh_hi = 2 * r_tube
-        vol_hi = calc_collar_volume(dh_hi)
-    
-    # Secant method
-    dh_prev = dh_lo
-    dh_curr = dh_hi
-    vol_prev = vol_lo
-    vol_curr = vol_hi
-    
-    for i in range(max_iter):
-        if abs(vol_curr - target_volume) < tolerance:
-            return {'delta_h': float(dh_curr), 'volume_achieved': float(vol_curr), 'iterations': i+1, 'converged': True}
+        # Direct formula: water_height = target_volume / opening_area
+        water_height = target_volume / opening_area
         
-        if abs(vol_curr - vol_prev) < 1e-10:
+        # Tube diameter = water height + sloshing space
+        tube_diameter = water_height + sloshing_height
+        
+        # Verify volume
+        volume_achieved = opening_area * water_height
+        
+        return {
+            'tube_diameter': float(tube_diameter),
+            'volume_achieved': float(volume_achieved),
+            'converged': True,
+            'iterations': 1
+        }
+    
+    except Exception as e:
+        return {'tube_diameter': 0.0, 'volume_achieved': 0.0, 'converged': False, 'iterations': 0}
+
+
+def find_collar_tube_diameter_with_displacement(
+    target_volume: float,
+    opening_diameter: float,
+    sloshing_height: float = 0.0,
+    center_offset: float = 0.0,
+) -> dict:
+    """
+    Solve for tube diameter D including torus displacement:
+        V = A_opening * (D - s) - π² R (D/2)²
+    where:
+        A_opening = π R², R = opening_diameter/2 + center_offset, s = sloshing_height.
+    Returns dict: { tube_diameter, volume_achieved, converged }
+    """
+    import math
+    try:
+        R = float(opening_diameter) / 2.0 + float(center_offset)
+        if R <= 0 or target_volume <= 0:
+            return {'tube_diameter': 0.0, 'volume_achieved': 0.0, 'converged': False}
+        A = math.pi * R * R
+        s = max(0.0, float(sloshing_height))
+        # Quadratic in D:  (π² R / 4) D²  - A D  + (A s + V) = 0  with sign flipped
+        # We write a D² + b D + c = 0
+        a = (math.pi ** 2) * R / 4.0
+        b = -A
+        c = A * s + target_volume
+        # Discriminant
+        disc = b * b - 4.0 * a * c
+        if disc < 0:
+            # No real solution (numerical/edge); fallback to simple model
+            D = (target_volume / A) + s
+            Vach = A * (D - s) - (math.pi ** 2) * R * (D * 0.5) ** 2
+            return {'tube_diameter': float(max(0.0, D)), 'volume_achieved': float(Vach), 'converged': False}
+        sqrt_disc = math.sqrt(disc)
+        # Roots: (-b ± sqrt_disc) / (2a)
+        D1 = (-b + sqrt_disc) / (2.0 * a)
+        D2 = (-b - sqrt_disc) / (2.0 * a)
+        # We need the small positive root (physical)
+        candidates = [d for d in (D1, D2) if d > 0]
+        if not candidates:
+            return {'tube_diameter': 0.0, 'volume_achieved': 0.0, 'converged': False}
+        D = min(candidates)
+        Vach = A * (D - s) - (math.pi ** 2) * R * (D * 0.5) ** 2
+        return {'tube_diameter': float(D), 'volume_achieved': float(Vach), 'converged': True}
+    except Exception:
+        return {'tube_diameter': 0.0, 'volume_achieved': 0.0, 'converged': False}
+
+
+def solve_gamma_for_cut_volume_match(
+    target_cut_volume: float,
+    rho: float,
+    g: float,
+    cut_diameter: float,
+    gamma_min: float = 100.0,
+    gamma_max: float = 1_000_000.0,
+    max_iter: int = 30,
+    rel_tol: float = 1e-3,
+) -> tuple:
+    """
+    Find gamma_s such that (V_full(gamma) - V_trunc(gamma, cut_diameter)) == target_cut_volume.
+    Returns (gamma_opt, df_trunc_opt, cut_volume_opt).
+    """
+    import numpy as np
+    from solver import generate_droplet_shape
+
+    def cut_volume_for_gamma(gamma_val: float):
+        """Return (cut_volume, df_trunc, feasible). Feasible means cut height exists for cut_diameter."""
+        try:
+            df_full = generate_droplet_shape(gamma_val, rho, g, cut_percentage=0)
+            if df_full is None or df_full.empty:
+                return 0.0, df_full, False
+            h_cut = find_height_for_diameter(df_full, float(cut_diameter))
+            if np.isnan(h_cut):
+                return 0.0, df_full, False
+            # Truncate at h_cut (no need to add a cap for volume difference)
+            df_trunc_raw = df_full[df_full['h'] <= h_cut].copy()
+            vol_full = calculate_volume(df_full)
+            vol_trunc = calculate_volume(df_trunc_raw)
+            cut_vol = max(0.0, float(vol_full) - float(vol_trunc))
+            return cut_vol, df_trunc_raw, True
+        except Exception:
+            return 0.0, None, False
+
+    # Log scan to find feasible bracket with sign change
+    gamma_vals = np.logspace(np.log10(max(1.0, gamma_min)), np.log10(max(gamma_max, gamma_min * 10.0)), num=25)
+    samples = []
+    for gv in gamma_vals:
+        cv, df_t, ok = cut_volume_for_gamma(float(gv))
+        if ok:
+            f = cv - float(target_cut_volume)
+            samples.append((float(gv), f, df_t, cv))
+
+    # If no feasible samples, return at gamma_max (flattened) best-effort
+    if not samples:
+        cv, df_t, _ = cut_volume_for_gamma(float(gamma_max))
+        return float(gamma_max), (df_t if df_t is not None else None), float(cv)
+
+    # Find sign change
+    left = None
+    right = None
+    for i in range(len(samples) - 1):
+        f1 = samples[i][1]
+        f2 = samples[i + 1][1]
+        if f1 == 0.0:
+            return samples[i][0], samples[i][2], samples[i][3]
+        if f1 * f2 < 0.0:
+            left = samples[i]
+            right = samples[i + 1]
             break
-        
-        # Secant step
-        dh_next = dh_curr - (vol_curr - target_volume) * (dh_curr - dh_prev) / (vol_curr - vol_prev)
-        
-        # Bounds
-        dh_next = max(0.0, min(dh_next, 2 * r_tube))
-        
-        vol_next = calc_collar_volume(dh_next)
-        
-        dh_prev = dh_curr
-        dh_curr = dh_next
-        vol_prev = vol_curr
-        vol_curr = vol_next
-    
-    return {'delta_h': float(dh_curr), 'volume_achieved': float(vol_curr), 'iterations': max_iter, 'converged': False}
+
+    # If no sign change, pick closest
+    if left is None or right is None:
+        best = min(samples, key=lambda s: abs(s[1]))
+        return best[0], best[2], best[3]
+
+    # Bisection within [left.gamma, right.gamma]
+    g_lo, f_lo, df_lo, cv_lo = left
+    g_hi, f_hi, df_hi, cv_hi = right
+    best_gamma, best_df, best_cv, best_err = (g_lo, df_lo, cv_lo, abs(f_lo))
+    for _ in range(max_iter):
+        g_mid = 0.5 * (g_lo + g_hi)
+        cv_mid, df_mid, ok = cut_volume_for_gamma(g_mid)
+        if not ok:
+            # push towards higher gamma (flatter, more likely feasible)
+            g_lo = g_mid
+            continue
+        f_mid = cv_mid - float(target_cut_volume)
+        if abs(f_mid) < best_err:
+            best_gamma, best_df, best_cv, best_err = (g_mid, df_mid, cv_mid, abs(f_mid))
+        if target_cut_volume > 0 and abs(f_mid) / target_cut_volume < rel_tol:
+            return g_mid, df_mid, cv_mid
+        # keep bracket
+        if f_lo * f_mid <= 0.0:
+            g_hi, f_hi, df_hi, cv_hi = g_mid, f_mid, df_mid, cv_mid
+        else:
+            g_lo, f_lo, df_lo, cv_lo = g_mid, f_mid, df_mid, cv_mid
+
+    return best_gamma, best_df, best_cv

@@ -12,10 +12,9 @@ from utils import (
     find_height_for_diameter,
     solve_gamma_for_volume,
     solve_gamma_for_height,
-    compute_torus_from_head,
     calculate_diameter_at_height,
-    compute_collar_segment_volume,
-    find_delta_h_for_collar_volume,
+    find_collar_tube_diameter_for_volume,
+    find_collar_tube_diameter_with_displacement,
 )
 from visualisatie import create_2d_plot, create_3d_plot
 from export import export_to_stl, export_to_dxf
@@ -34,25 +33,22 @@ st.markdown("Compute droplet shapes for given parameters and choose your cut opt
 with st.expander("ℹ️ Help — How does Method 1 work?", expanded=False):
     st.markdown(
         """
-        - **Goal**: Solve the **Young–Laplace** (De Gennes) equilibrium droplet for given material and fluid parameters.
-        - **What is γₛ?** Effective **membrane tension** (N/m). Not E‑modulus, not pressure; the in‑plane tension that with **Δp = 2 γₛ H** sets curvature. Higher γₛ ⇒ flatter; lower γₛ ⇒ rounder.
+        - **Goal**: Compute the droplet (Young–Laplace) and design a collar that restores the removed water volume.
+        - **Key principle**: **Collar volume = Cut volume** (pure volume matching, no pressure/Δh logic).
         - **Inputs**:
-          - **γₛ (N/m)**: membrane/surface tension
-          - **ρ (kg/m³)**: fluid density
-          - **g (m/s²)**: gravity
-        - **When cutting the top**:
-          - Opening removes part of the **water column** and some **membrane**.
-          - Result: lower **hydrostatic head** near the top and different edge curvature; the droplet becomes slimmer/lower than the closed one.
-        - **How we compensate (collar/torus)**
-          - A **rigid ring** fixes the opening diameter so the membrane cannot move there.
-          - A **collar (donut/torus)** is filled with water to **Δh** above the ring.
-          - This restores **ρ g Δh** pressure at the edge to match the closed reference curvature.
-        - **Cut options**:
-          - **None**: full (closed) droplet
-          - **Cut percentage**: slice off a percentage of the height
-          - **Cut diameter**: set a fixed opening (diameter). We find the **cut height** and draw a **flat** lid at that height.
-        - **Units**: length **m**, volume **m³**, γₛ **N/m**, ρ **kg/m³**, g **m/s²**.
-        - **Outputs**: volume, max height, base diameter, max diameter, opening diameter, and collar properties.
+          - **γₛ (N/m)**, **ρ (kg/m³)**, **g (m/s²)**
+          - **Cut**: by percentage or by opening diameter → we determine the cut height and flat top.
+          - **Sloshing height (m)**: optional freeboard added above the water level inside the collar.
+        - **Definitions**:
+          - **Cut volume** = full droplet volume − truncated droplet volume.
+          - **Collar volume (net)** = extra capacity added by the collar around the opening.
+          - **Opening area** A = π·R² with R = opening_diameter/2.
+        - **Physics (always enabled)**:
+          - We solve the tube diameter D from the exact balance:
+            \(\;\text{Cut} = A·(D − s) − \pi^2 R (D/2)^2\;\) with sloshing s.
+          - De tweede term is de waterverdringing door de torus (fysisch correct).
+        - **Outputs**: droplet volume, cut volume, collar volume, collar tube diameter, opening diameter, heights/diameters.
+        - **Units**: m and m³.
         """
     )
 
@@ -158,9 +154,13 @@ with col4:
     
     st.markdown("")
     st.subheader("Collar / torus (optional)")
-    extra_slosh_height = st.number_input("Extra collar height for sloshing (m)", min_value=0.0, value=0.10, step=0.01)
-    tube_diameter = st.number_input("Collar tube diameter (m)", min_value=0.0, value=0.50, step=0.01, help="Outer diameter of the collar tube")
-    tube_center_offset = st.number_input("Collar center offset (m)", min_value=0.0, value=0.0, step=0.01, help="Offset of tube center from ring edge")
+    sloshing_height = st.number_input(
+        "Sloshing height (m)",
+        min_value=0.0,
+        value=0.0,
+        step=0.01,
+        help="Extra unfilled height in collar tube to prevent splashing (freeboard)"
+    )
 
 with col5:
     st.subheader("Action")
@@ -243,21 +243,16 @@ with col5:
                 metrics['bottom_diameter'] = full_basis_diameter_final
                 metrics['max_diameter'] = full_max_diameter_final
                 
-                delta_h_water = 0.0
-                seam_h = None
+                # Bewaar afkaphoogte voor visualisatie
+                cut_h_final = None
                 if (use_diameter_mode and (actual_cut_diameter is not None and actual_cut_diameter > 0)) or (use_percentage_mode and cut_percentage > 0):
                     if use_diameter_mode and (actual_cut_diameter is not None and actual_cut_diameter > 0):
                         cut_h_final = find_height_for_diameter(df_full_final, float(actual_cut_diameter))
                     else:
                         cut_h_final = float(df['h'].max()) if not df.empty else np.nan
-                    if cut_h_final is not None and not np.isnan(cut_h_final):
-                        delta_h_water = max(0.0, float(full_max_height_final) - float(cut_h_final))
-                        seam_h = float(full_max_height_final)
                 
-                metrics['delta_h_water'] = delta_h_water
-                metrics['h_seam_eff'] = seam_h if seam_h is not None else 0.0
                 # Bewaar afkaphoogte voor duidelijke visual (cut-plane)
-                if 'cut_h_final' in locals() and cut_h_final is not None and not np.isnan(cut_h_final):
+                if cut_h_final is not None and not np.isnan(cut_h_final):
                     metrics['h_cut'] = float(cut_h_final)
                 else:
                     metrics['h_cut'] = 0.0
@@ -269,10 +264,10 @@ with col5:
                     if 'x_shifted' in df_full_final.columns and cut_h_final is not None and not np.isnan(cut_h_final):
                         opening_diam_for_torus = float(calculate_diameter_at_height(df_full_final, cut_h_final))
                 
-                if opening_diam_for_torus is not None and delta_h_water > 0:
-                    # NOUWEE LOGICA: volume_kraag moet exact gelijk zijn aan volume_afgekapt
+                # VOLLEDIG NIEUWE LOGICA: Puur volume-gebaseerd, GEEN druk
+                if opening_diam_for_torus is not None and opening_diam_for_torus > 0:
+                    # Stap 1: Bereken volume_afgekapt
                     volume_full = full_metrics_final.get('volume', 0.0)
-                    # Gebruik df_before_top voor correcte volume berekening (zonder de toegevoegde top)
                     if df_before_top is not None:
                         metrics_before_top = get_droplet_metrics(df_before_top)
                         volume_cut = metrics_before_top.get('volume', 0.0)
@@ -280,52 +275,53 @@ with col5:
                         volume_cut = metrics.get('volume', 0.0)
                     volume_afgekapt = volume_full - volume_cut
                     
-                    # Los Δh op zodat volume_kraag(Δh) = volume_afgekapt
-                    dh_result = find_delta_h_for_collar_volume(
+                    # Stap 2: Auto-bereken tube diameter zodat volume_kraag = volume_afgekapt
+                    from utils import find_collar_tube_diameter_with_displacement
+                    tube_result = find_collar_tube_diameter_with_displacement(
                         target_volume=volume_afgekapt,
                         opening_diameter=opening_diam_for_torus,
-                        tube_diameter=float(tube_diameter),
-                        center_offset=float(tube_center_offset),
-                        tolerance=0.01,
-                        max_iter=100
+                        sloshing_height=sloshing_height,
+                        center_offset=0.0,
                     )
-                    
-                    # Update delta_h_water met de gevonden waarde
-                    if dh_result['converged']:
-                        delta_h_water = dh_result['delta_h']
-                        metrics['delta_h_water'] = delta_h_water
-                        head_total = float(delta_h_water) + float(extra_slosh_height)
+                    if tube_result['converged']:
+                        tube_diameter_final = tube_result['tube_diameter']
                     else:
-                        # Fallback naar oude logica als geen convergerende oplossing
-                        head_total = float(delta_h_water) + float(extra_slosh_height)
+                        # Fallback indien niet converged
+                        tube_diameter_final = 0.5
                     
-                    torus_info = compute_torus_from_head(opening_diameter=opening_diam_for_torus,
-                                                         head_total=head_total,
-                                                         wall_thickness=0.0,
-                                                         safety_freeboard=float(extra_slosh_height))
-                    metrics['torus_R_major'] = torus_info['R_major']
-                    metrics['torus_r_top'] = torus_info['r_top']
-                    metrics['torus_r_water'] = torus_info['r_water']
-                    metrics['torus_head_total'] = torus_info['head_total']
-                    metrics['torus_water_volume'] = torus_info['water_volume']
-                    
-                    # Simple half‑torus displacement model (per user spec):
-                    # r = (Δh + sloshing)/2, R_major = opening_diameter/2, displaced = portion inside head region
+                    # Stap 3: Bereken kraagvolume met simpel model
+                    # Collar Volume = π × r_ring² × water_height
+                    # Water height = tube diameter - sloshing height
                     import math
-                    R_major = float(opening_diam_for_torus) / 2.0
-                    head_total_clean = float(delta_h_water) + float(extra_slosh_height)
-                    r_simple = head_total_clean / 2.0
-                    # Full torus volume
-                    v_torus_simple = 2.0 * (math.pi ** 2) * R_major * (r_simple ** 2)
-                    # Only the portion that sits in the head region (half‑torus) is displaced
-                    displaced_simple = 0.5 * v_torus_simple
-                    # Equivalent head volume A × Δh
-                    opening_area = float(np.pi) * (float(opening_diam_for_torus) / 2.0) ** 2
-                    eq_vol = opening_area * float(delta_h_water)
-                    metrics['equivalent_opening_volume'] = eq_vol
-                    metrics['head_volume_net'] = max(0.0, eq_vol - displaced_simple)
+                    R_major = opening_diam_for_torus / 2.0
+                    r_ring = R_major
+                    r_tube = max(0.0, float(tube_diameter_final) / 2.0)
+                    water_height = tube_diameter_final - sloshing_height  # Water fills to top of tube (no sloshing in this calc)
+                    # Physically exact: subtract torus displacement
+                    volume_kraag_calc = math.pi * (r_ring ** 2) * water_height - (math.pi ** 2) * R_major * (r_tube ** 2)
+                    
+                    # Opslaan metrics
                     metrics['volume_afgekapt'] = volume_afgekapt
-                    metrics['volume_kraag_match'] = dh_result['converged']
+                    metrics['volume_kraag'] = volume_kraag_calc
+                    metrics['collar_tube_diameter'] = float(tube_diameter_final)
+                    metrics['torus_R_major'] = float(R_major)
+                    metrics['torus_r_top'] = float(r_tube)
+                    metrics['torus_r_water'] = float(r_tube)
+                    metrics['torus_water_volume'] = float(volume_kraag_calc)
+                    
+                    # Voor visualisatie: h_seam_eff = cut hoogte
+                    if cut_h_final is not None and not np.isnan(cut_h_final):
+                        metrics['h_seam_eff'] = float(cut_h_final)
+                    else:
+                        metrics['h_seam_eff'] = 0.0
+                    # Water level inside collar: seam + (tube_diameter - sloshing)
+                    try:
+                        h_seam = float(metrics.get('h_seam_eff', 0.0))
+                        d_tube = float(metrics.get('collar_tube_diameter', 0.0))
+                        s_free = float(sloshing_height)
+                        metrics['h_waterline'] = float(h_seam + max(0.0, d_tube - s_free))
+                    except Exception:
+                        metrics['h_waterline'] = float(metrics.get('h_seam_eff', 0.0))
                 
                 st.session_state.df = df
                 st.session_state.metrics = metrics
@@ -351,29 +347,51 @@ st.markdown("---")
 if st.session_state.df is not None:
     st.header("📊 Specifications")
     
+    # Volumes section
+    st.subheader("💧 Volumes")
+    col_vol1, col_vol2, col_vol3 = st.columns(3)
+    
+    droplet_vol = st.session_state.metrics.get('volume', 0)
+    collar_vol = st.session_state.metrics.get('volume_kraag', 0)
+    total_vol = droplet_vol + collar_vol
+    
+    with col_vol1:
+        st.metric("Droplet Volume (m³)", f"{droplet_vol:.2f}")
+    with col_vol2:
+        st.metric("Collar Volume (m³)", f"{collar_vol:.2f}")
+    with col_vol3:
+        st.metric("Total Volume (m³)", f"{total_vol:.2f}")
+    
+    st.markdown("")
+    
+    # Geometry section
+    st.subheader("📐 Geometry")
     col1, col2 = st.columns(2)
     
     with col1:
-        st.metric("Volume (m³)", f"{st.session_state.metrics.get('volume', 0):.2f}")
         st.metric("Max height (m)", f"{st.session_state.metrics.get('max_height', 0):.2f}")
         st.metric("Max diameter (m)", f"{st.session_state.metrics.get('max_diameter', 0):.2f}")
+        st.metric("Base diameter (m)", f"{st.session_state.metrics.get('bottom_diameter', 0):.2f}")
     
     with col2:
-        st.metric("Base diameter (m)", f"{st.session_state.metrics.get('bottom_diameter', 0):.2f}")
         if cut_method != "No cut":
             st.metric("Opening diameter (m)", f"{st.session_state.metrics.get('top_diameter', 0):.2f}")
         else:
             st.metric("Opening diameter (m)", "-")
+        if st.session_state.metrics.get('volume_afgekapt', 0) > 0:
+            st.metric("Collar tube diameter (m)", f"{st.session_state.metrics.get('collar_tube_diameter', 0):.2f}")
+    
+    st.markdown("")
+    
+    # Material section
+    st.subheader("⚙️ Material")
+    col3, col4 = st.columns(2)
+    
+    with col3:
         st.metric("γₛ (N/m)", f"{st.session_state.physical_params.get('gamma_s', 0):.0f}")
-        
-        if st.session_state.metrics.get('delta_h_water', 0) > 0:
-            st.metric("Required Δh (m)", f"{st.session_state.metrics.get('delta_h_water', 0):.2f}")
-            if st.session_state.metrics.get('torus_head_total', 0) > 0:
-                st.metric("Total collar head (m)", f"{st.session_state.metrics.get('torus_head_total', 0):.2f}")
-                # Toon kraagvolume (moet gelijk zijn aan afgekapt volume)
-                volume_afgekapt = st.session_state.metrics.get('volume_afgekapt', 0)
-                if volume_afgekapt > 0:
-                    st.metric("Collar volume (m³)", f"{volume_afgekapt:.2f}")
+    with col4:
+        if st.session_state.metrics.get('volume_afgekapt', 0) > 0:
+            st.metric("Cut volume (m³)", f"{st.session_state.metrics.get('volume_afgekapt', 0):.2f}")
     
     st.markdown("---")
     st.header("📈 Visualisation")

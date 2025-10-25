@@ -146,17 +146,7 @@ def create_2d_plot(
     try:
         seam_h = float(metrics.get('h_seam_eff', 0.0))
         if show_seam and seam_h > 0:
-            fig.add_hline(y=seam_h, line=dict(color='#60a5fa', width=1.5), annotation_text='Seam/top', annotation_position='top left')
-        # Waterhoogte (kraag) – toon als er kraag/water is ingesteld (delta_h_water > 0)
-        delta_h_water = float(metrics.get('delta_h_water', 0.0))
-        if delta_h_water > 0 and seam_h > 0:
-            water_h = seam_h  # water level equals seam (Δh referenced at ring)
-            fig.add_hline(
-                y=water_h,
-                line=dict(color='#10b981', width=1.5, dash='dash'),
-                annotation_text='Water level (collar)',
-                annotation_position='top right'
-            )
+            fig.add_hline(y=seam_h, line=dict(color='#60a5fa', width=1.5), annotation_text='Opening', annotation_position='top left')
     except Exception:
         seam_h = 0.0
 
@@ -168,14 +158,21 @@ def create_2d_plot(
     except Exception:
         pass
 
+    # Waterline (blauwe streepjeslijn)
+    try:
+        h_water = float(metrics.get('h_waterline', metrics.get('h_seam_eff', metrics.get('h_cut', 0.0))))
+        if h_water and h_water > 0:
+            fig.add_hline(y=h_water, line=dict(color='#3b82f6', width=1.5, dash='dash'), annotation_text='Water level', annotation_position='bottom left')
+    except Exception:
+        pass
+
     # Donut/torus in 2D (twee cirkels links/rechts)
     try:
         R_major = float(metrics.get('torus_R_major', 0.0))
         r_top = float(metrics.get('torus_r_top', 0.0))
-        delta_h = float(metrics.get('delta_h_water', 0.0))
-        if R_major > 0 and r_top > 0 and (seam_h > 0 or (show_cut_plane and (cut_plane_h or metrics.get('h_cut', 0)))):
-            ring_z = seam_h - delta_h
-            zc_top = ring_z + r_top  # donut net boven de ring
+        if R_major > 0 and r_top > 0 and seam_h > 0:
+            # Kraag op opening hoogte
+            zc_top = seam_h + r_top  # donut net boven de opening
             th = np.linspace(0, 2*np.pi, 200)
             # Links en/of rechts afhankelijk van view; standaard alleen links tonen
             if view in ("full", "half-left"):
@@ -341,11 +338,10 @@ def create_3d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "
     try:
         R_major = float(metrics.get('torus_R_major', 0.0))
         r_top = float(metrics.get('torus_r_top', 0.0))
-        delta_h = float(metrics.get('delta_h_water', 0.0))
         seam_h = float(metrics.get('h_seam_eff', 0.0))
         if R_major > 0 and r_top > 0 and seam_h > 0:
-            ring_z = seam_h - delta_h
-            zc_top = ring_z + r_top
+            # Kraag op opening hoogte
+            zc_top = seam_h + r_top
             u = np.linspace(0, 2*np.pi, 50)
             v = np.linspace(0, 2*np.pi, 30)
             U, V = np.meshgrid(u, v)

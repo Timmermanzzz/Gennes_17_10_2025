@@ -98,8 +98,8 @@ def create_2d_plot(
             try:
                 x_right_edge_band = float(band['x_plot'].max())
                 x_left_edge_band = float(band['x_plot'].min())
-                # Radius = afstand tussen rechter- en linkerzijde binnen de band
-                R_est = max(0.0, x_right_edge_band - x_left_edge_band)
+                # Radius = halve afstand (bandbreedte is diameter)
+                R_est = max(0.0, 0.5 * (x_right_edge_band - x_left_edge_band))
                 R_top = max(R_top, R_est)
             except Exception:
                 pass
@@ -312,25 +312,8 @@ def create_3d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "
         hovertemplate='<b>X:</b> %{x:.4f} m<br><b>Y:</b> %{y:.4f} m<br><b>Z (height):</b> %{z:.4f} m<extra></extra>'
     )])
 
-    # Indien bovenaan een vlak niveau bestaat, teken extra "deksel" exact op de naad
-    # Detectie: groepeer op afgeronde hoogte en kies het hoogste niveau met >= 10 punten
-    z_rounded = np.round(z, 6)
-    unique_vals, counts = np.unique(z_rounded, return_counts=True)
-    candidate_levels = unique_vals[counts >= 10]
-    if candidate_levels.size > 0:
-        h_top = float(np.max(candidate_levels))
-        sel = np.isclose(z, h_top)
-        if np.any(sel):
-            # Radius op dit niveau uit gecentreerde r-vector
-            r_top = float(np.max(r[sel]))
-            if r_top > 0:
-                rr = np.linspace(0, r_top, 2)
-                TT, RR = np.meshgrid(theta, rr, indexing='xy')
-                Xcap = RR * np.cos(TT)
-                Ycap = RR * np.sin(TT)
-                # Plaats de deksel exact op de naad (minus kleine epsilon om z-fighting/zweven te voorkomen)
-                Zcap = np.full_like(Xcap, h_top - 1e-6)
-                fig.add_surface(x=Xcap, y=Ycap, z=Zcap, colorscale='Blues', showscale=False, opacity=0.95)
+    # Opmerking: de dataset bevat al expliciete top-punten; het oppervlak sluit daardoor vanzelf.
+    # We voegen daarom GEEN extra deksel meer toe, om dubbele schijven te voorkomen.
     
     # Voeg 3D torus toe indien aanwezig
     if metrics is None:

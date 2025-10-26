@@ -295,10 +295,10 @@ def _make_df_with_cuts(gamma_s: float, rho: float, g: float,
         if np.isnan(h_cut):
             return df_full
         df = df_full[df_full['h'] <= h_cut].copy()
-        # Voeg vlakke top toe (alleen voor visualisatie/export)
+        # Voeg vlakke top toe aan de RECHTER rand (0..R) voor consistente 2D/3D
         target_radius = float(cut_diameter) / 2.0
         n_points = 30
-        x_shifted_vals = np.linspace(-target_radius, target_radius, n_points)
+        x_shifted_vals = np.linspace(0.0, target_radius, n_points)
         x_max_current = df['x-x_0'].max() if 'x-x_0' in df.columns else 0.0
         top_points = pd.DataFrame({
             'B': 1.0,

@@ -122,6 +122,15 @@ with col_td_3:
 
 st.markdown("---")
 
+st.subheader("🌊 Collar options")
+sloshing_m3 = st.number_input(
+    "Sloshing height (m)",
+    min_value=0.0,
+    value=0.0,
+    step=0.01,
+    help="Extra vrije boord boven het water in de kraag"
+)
+
 if st.button("🔬 Generate Solutions Table", type="primary", use_container_width=True):
     with st.spinner("Computing..."):
         try:
@@ -172,7 +181,8 @@ if st.button("🔬 Generate Solutions Table", type="primary", use_container_widt
             for tube_diam in tube_values:
                 R_major = cut_diameter_m3 / 2.0
                 r_tube = tube_diam / 2.0
-                water_height = tube_diam  # s=0
+                # Netto watervolume B = A*(D - s) - π² R (D/2)²
+                water_height = max(0.0, tube_diam - float(sloshing_m3))
                 collar_vol_phys = (np.pi * (R_major ** 2)) * water_height - ((np.pi ** 2) * R_major * (r_tube ** 2))
                 # Find gamma_s such that cut volume equals collar_vol_phys
                 gamma_match, df_cut_gamma, cut_vol_gamma = solve_gamma_for_cut_volume_match(
@@ -209,8 +219,8 @@ if st.button("🔬 Generate Solutions Table", type="primary", use_container_widt
                     'volume_afgekapt': float(cut_vol_gamma),
                     'volume_kraag': float(collar_vol_phys),
                 }
-                # Waterline at seam + tube height (no sloshing here)
-                entry['h_waterline'] = float(h_cut + tube_diam)
+                # Waterline at seam + (tube height - sloshing)
+                entry['h_waterline'] = float(h_cut + water_height)
                 solutions.append(entry)
             
             if not solutions:

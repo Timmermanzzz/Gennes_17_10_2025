@@ -369,7 +369,11 @@ if st.session_state.df is not None:
     col1, col2 = st.columns(2)
     
     with col1:
-        st.metric("Max height (m)", f"{st.session_state.metrics.get('max_height', 0):.2f}")
+        droplet_height = float(st.session_state.metrics.get('max_height', 0) or 0.0)
+        tube_d_for_total = float(st.session_state.metrics.get('collar_tube_diameter', 0) or 0.0) if st.session_state.metrics.get('volume_afgekapt', 0) > 0 else 0.0
+        total_height = droplet_height + tube_d_for_total
+        st.metric("Droplet height (m)", f"{droplet_height:.2f}")
+        st.metric("Total height (m)", f"{total_height:.2f}")
         st.metric("Max diameter (m)", f"{st.session_state.metrics.get('max_diameter', 0):.2f}")
         st.metric("Base diameter (m)", f"{st.session_state.metrics.get('bottom_diameter', 0):.2f}")
     

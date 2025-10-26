@@ -11,7 +11,6 @@ from utils import (
     get_droplet_metrics,
     find_height_for_diameter,
     calculate_diameter_at_height,
-    find_collar_tube_diameter_for_volume,
     solve_gamma_for_cut_volume_match
 )
 from visualisatie import create_2d_plot, create_3d_plot
@@ -68,13 +67,7 @@ with col1:
         step=0.5,
         help="Desired opening diameter of the reservoir"
     )
-    gamma_s_m3 = st.number_input(
-        "γₛ - Surface tension (N/m)",
-        min_value=100.0,
-        max_value=1000000.0,
-        value=35000.0,
-        step=1000.0
-    )
+    st.caption("γₛ wordt per oplossing berekend; geen invoer nodig.")
 
 with col2:
     rho_m3 = st.number_input(
@@ -134,8 +127,8 @@ sloshing_m3 = st.number_input(
 if st.button("🔬 Generate Solutions Table", type="primary", use_container_width=True):
     with st.spinner("Computing..."):
         try:
-            # Genereer druppel met opgegeven γₛ
-            df_full = generate_droplet_shape(gamma_s_m3, rho_m3, g_m3, cut_percentage=0)
+            # Genereer druppel met een start γₛ (wordt verderop per oplossing herberekend)
+            df_full = generate_droplet_shape(35000.0, rho_m3, g_m3, cut_percentage=0)
             h_cut = find_height_for_diameter(df_full, cut_diameter_m3)
             
             if h_cut is None or np.isnan(h_cut):
@@ -181,9 +174,21 @@ if st.button("🔬 Generate Solutions Table", type="primary", use_container_widt
             for tube_diam in tube_values:
                 R_major = cut_diameter_m3 / 2.0
                 r_tube = tube_diam / 2.0
-                # Netto watervolume B = A*(D - s) - π² R (D/2)²
+                # Fysisch: B = A_open*h - 2πR*A_segment(r, h)
                 water_height = max(0.0, tube_diam - float(sloshing_m3))
-                collar_vol_phys = (np.pi * (R_major ** 2)) * water_height - ((np.pi ** 2) * R_major * (r_tube ** 2))
+                A_open = np.pi * (R_major ** 2)
+                # segment area
+                if water_height <= 0.0:
+                    A_seg = 0.0
+                elif water_height >= 2.0 * r_tube:
+                    A_seg = np.pi * (r_tube ** 2)
+                else:
+                    A_seg = (
+                        (r_tube ** 2) * np.arccos((r_tube - water_height) / r_tube)
+                        - (r_tube - water_height) * np.sqrt(max(0.0, 2.0 * r_tube * water_height - water_height ** 2))
+                    )
+                V_disp = 2.0 * np.pi * R_major * A_seg
+                collar_vol_phys = max(0.0, A_open * water_height - V_disp)
                 # Find gamma_s such that cut volume equals collar_vol_phys
                 gamma_match, df_cut_gamma, cut_vol_gamma = solve_gamma_for_cut_volume_match(
                     target_cut_volume=float(collar_vol_phys),
@@ -195,7 +200,31 @@ if st.button("🔬 Generate Solutions Table", type="primary", use_container_widt
                     max_iter=25,
                     rel_tol=1e-3,
                 )
-                metrics = get_droplet_metrics(df_cut_gamma)
+                # Recompute cut height for this gamma and add a flat top (0..R) for consistent visuals
+                try:
+                    h_cut_gamma = float(df_cut_gamma['h'].max()) if df_cut_gamma is not None and not df_cut_gamma.empty else float('nan')
+                except Exception:
+                    h_cut_gamma = float('nan')
+                df_vis = df_cut_gamma
+                try:
+                    if df_cut_gamma is not None and not df_cut_gamma.empty and not np.isnan(h_cut_gamma):
+                        n_points = 30
+                        x_shifted_vals = np.linspace(0.0, R_major, n_points)
+                        x_max_current = df_cut_gamma['x-x_0'].max() if 'x-x_0' in df_cut_gamma.columns else 0.0
+                        top_points_gamma = pd.DataFrame({
+                            'B': 1.0, 'C': 1.0, 'z': 0,
+                            'x-x_0': x_shifted_vals + x_max_current,
+                            'x_shifted': x_shifted_vals,
+                            'h': h_cut_gamma
+                        })
+                        subset_cols_gamma = ['x-x_0', 'h'] if 'x-x_0' in df_cut_gamma.columns else ['x_shifted', 'h']
+                        df_vis = pd.concat([df_cut_gamma, top_points_gamma], ignore_index=True).drop_duplicates(subset=subset_cols_gamma, keep='first').reset_index(drop=True)
+                except Exception:
+                    df_vis = df_cut_gamma
+
+                metrics = get_droplet_metrics(df_vis)
+                droplet_h = float(metrics.get('max_height', 0) or 0.0)
+                total_h = droplet_h + float(tube_diam)
                 entry = {
                     'Tube diameter (m)': round(float(tube_diam), 3),
                     'Collar volume (m³)': round(float(collar_vol_phys), 2),
@@ -203,7 +232,9 @@ if st.button("🔬 Generate Solutions Table", type="primary", use_container_widt
                     'Volume match (%)': round(100.0 * (cut_vol_gamma / max(collar_vol_phys, 1e-9)), 1),
                     'γₛ match (N/m)': round(float(gamma_match), 1),
                     'Reservoir volume (m³)': round(metrics.get('volume', 0), 2),
-                    'Max height (m)': round(metrics.get('max_height', 0), 2),
+                    'Total volume (m³)': round(metrics.get('volume', 0) + float(collar_vol_phys), 2),
+                    'Droplet height (m)': round(droplet_h, 2),
+                    'Total height (m)': round(total_h, 2),
                     'Base diameter (m)': round(metrics.get('bottom_diameter', 0), 2),
                     'Max diameter (m)': round(metrics.get('max_diameter', 0), 2),
                     # Intern voor visualisatie/export van de selectie
@@ -211,16 +242,16 @@ if st.button("🔬 Generate Solutions Table", type="primary", use_container_widt
                     'torus_r_top': r_tube,
                     'torus_r_water': r_tube,
                     'torus_water_volume': collar_vol_phys,
-                    'h_seam_eff': float(h_cut),
+                    'h_seam_eff': float(h_cut_gamma if not np.isnan(h_cut_gamma) else h_cut),
                     'collar_tube_diameter': float(tube_diam),
-                    '_df': df_cut_gamma,
+                    '_df': df_vis,
                     '_gamma': float(gamma_match),
-                    '_h_cut': h_cut,
+                    '_h_cut': float(h_cut_gamma if not np.isnan(h_cut_gamma) else h_cut),
                     'volume_afgekapt': float(cut_vol_gamma),
                     'volume_kraag': float(collar_vol_phys),
                 }
                 # Waterline at seam + (tube height - sloshing)
-                entry['h_waterline'] = float(h_cut + water_height)
+                entry['h_waterline'] = float((h_cut_gamma if not np.isnan(h_cut_gamma) else h_cut) + water_height)
                 solutions.append(entry)
             
             if not solutions:
@@ -240,7 +271,7 @@ if st.session_state.solutions_table_m3 is not None:
     
     # Verwijder interne kolommen voor display
     display_cols = ['Tube diameter (m)', 'Collar volume (m³)', 'Cut volume (m³)', 'Volume match (%)',
-                    'γₛ match (N/m)', 'Reservoir volume (m³)', 'Max height (m)', 'Base diameter (m)', 'Max diameter (m)']
+                    'γₛ match (N/m)', 'Reservoir volume (m³)', 'Total volume (m³)', 'Droplet height (m)', 'Total height (m)', 'Base diameter (m)', 'Max diameter (m)']
     
     solutions_display = []
     for sol in st.session_state.solutions_table_m3:
@@ -307,19 +338,41 @@ if st.session_state.df_selected_m3 is not None:
     
     st.header("📊 Selected Solution")
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.metric("Tube diameter (m)", f"{st.session_state.selected_solution_m3['Tube diameter (m)']:.3f}")
-        st.metric("Collar volume (m³)", f"{st.session_state.selected_solution_m3['Collar volume (m³)']:.2f}")
+    # Volumes (like Method 1)
+    st.subheader("💧 Volumes")
+    vcol1, vcol2, vcol3 = st.columns(3)
+    droplet_vol_sel = float(st.session_state.selected_solution_m3['Reservoir volume (m³)'])
+    collar_vol_sel = float(st.session_state.selected_solution_m3['Collar volume (m³)'])
+    total_vol_sel = droplet_vol_sel + collar_vol_sel
+    with vcol1:
+        st.metric("Droplet Volume (m³)", f"{droplet_vol_sel:.2f}")
+    with vcol2:
+        st.metric("Collar Volume (m³)", f"{collar_vol_sel:.2f}")
+    with vcol3:
+        st.metric("Total Volume (m³)", f"{total_vol_sel:.2f}")
+    vcol4, vcol5 = st.columns(2)
+    with vcol4:
         st.metric("Cut volume (m³)", f"{st.session_state.selected_solution_m3['Cut volume (m³)']:.2f}")
+    with vcol5:
         st.metric("Volume match (%)", f"{st.session_state.selected_solution_m3['Volume match (%)']:.1f}")
-    
-    with col2:
-        st.metric("Reservoir volume (m³)", f"{st.session_state.selected_solution_m3['Reservoir volume (m³)']:.2f}")
-        st.metric("Max height (m)", f"{st.session_state.selected_solution_m3['Max height (m)']:.2f}")
+
+    # Geometry section
+    st.subheader("📐 Geometry")
+    g1, g2, g3 = st.columns(3)
+    opening_diam_sel = 2.0 * float(st.session_state.selected_solution_m3.get('torus_R_major', 0.0) or 0.0)
+    with g1:
+        st.metric("Opening diameter (m)", f"{opening_diam_sel:.2f}")
+        st.metric("Tube diameter (m)", f"{st.session_state.selected_solution_m3['Tube diameter (m)']:.3f}")
+    with g2:
+        st.metric("Droplet height (m)", f"{st.session_state.selected_solution_m3['Droplet height (m)']:.2f}")
+        st.metric("Total height (m)", f"{st.session_state.selected_solution_m3['Total height (m)']:.2f}")
+    with g3:
         st.metric("Base diameter (m)", f"{st.session_state.selected_solution_m3['Base diameter (m)']:.2f}")
         st.metric("Max diameter (m)", f"{st.session_state.selected_solution_m3['Max diameter (m)']:.2f}")
+
+    # Material section
+    st.subheader("⚙️ Material")
+    st.metric("γₛ match (N/m)", f"{st.session_state.selected_solution_m3['γₛ match (N/m)']:.1f}")
     
     st.markdown("---")
     
@@ -352,7 +405,7 @@ if st.session_state.df_selected_m3 is not None:
     with col_exp1:
         def gen_stl():
             with tempfile.NamedTemporaryFile(delete=False, suffix='.stl') as tmp:
-                if export_to_stl(st.session_state.df_selected_m3, tmp.name):
+                if export_to_stl(st.session_state.df_selected_m3, tmp.name, metrics=st.session_state.metrics_selected_m3):
                     with open(tmp.name, 'rb') as f:
                         return f.read()
             return None
@@ -372,7 +425,7 @@ if st.session_state.df_selected_m3 is not None:
     with col_exp2:
         def gen_dxf():
             with tempfile.NamedTemporaryFile(delete=False, suffix='.dxf') as tmp:
-                if export_to_dxf(st.session_state.df_selected_m3, tmp.name):
+                if export_to_dxf(st.session_state.df_selected_m3, tmp.name, metrics=st.session_state.metrics_selected_m3):
                     with open(tmp.name, 'rb') as f:
                         return f.read()
             return None

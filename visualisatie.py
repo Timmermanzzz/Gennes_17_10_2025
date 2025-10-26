@@ -103,14 +103,19 @@ def create_2d_plot(
                 R_top = max(R_top, R_est)
             except Exception:
                 pass
-        # Construeer de vlakke top als aparte trace verankerd aan de rechterrand
-        if R_top > 0:
+        # Construeer de vlakke top als aparte trace verankerd aan de rechterrand (x=0)
+        if True:
+            # Meet naadstraal zoals in DXF: max |x| in seam-band; fallback naar R_top
+            R_used = R_top
             try:
-                x_right_edge = float(band['x_plot'].max()) if not band.empty else 0.0
+                if not band.empty:
+                    R_used = float(np.max(np.abs(band['x_plot'].to_numpy(dtype=float))))
             except Exception:
-                x_right_edge = 0.0
-            # Teken de top links van de rechterrand: [x_right - R_top, x_right]
-            x_top = np.linspace(x_right_edge - R_top, x_right_edge, 60)
+                pass
+            if R_used <= 0.0:
+                R_used = R_top
+            x_right_edge = 0.0
+            x_top = np.linspace(-R_used, x_right_edge, 80)
             df_top = pd.DataFrame({'x_plot': x_top, 'h': np.full_like(x_top, cp_h_try)})
 
     # Teken body in oplopende hoogte (voorkomt horizontale overshoots)
@@ -171,16 +176,46 @@ def create_2d_plot(
         R_major = float(metrics.get('torus_R_major', 0.0))
         r_top = float(metrics.get('torus_r_top', 0.0))
         if R_major > 0 and r_top > 0 and seam_h > 0:
-            # Kraag op opening hoogte
+            # Kraag op opening hoogte. Meet de werkelijke naadstraal uit data (C0‑alignment)
+            R_measured = R_major
+            try:
+                eps_h = 1e-4
+                band = df_valid[(df_valid['h'] >= seam_h - eps_h) & (df_valid['h'] <= seam_h + eps_h)]
+                if not band.empty:
+                    x_min = float(band['x_plot'].min())
+                    x_max = float(band['x_plot'].max())
+                    R_measured = max(abs(x_min), abs(x_max))
+                else:
+                    # lineaire interpolatie op r(h) = max |x_plot| per hoogte
+                    dfh = (
+                        df_valid.assign(r_abs=lambda d: d['x_plot'].abs())
+                        .groupby('h')['r_abs'].max().reset_index().sort_values('h')
+                    )
+                    hs = dfh['h'].to_numpy(dtype=float)
+                    rs = dfh['r_abs'].to_numpy(dtype=float)
+                    if seam_h <= hs.min():
+                        R_measured = float(dfh.iloc[0]['r_abs'])
+                    elif seam_h >= hs.max():
+                        R_measured = float(dfh.iloc[-1]['r_abs'])
+                    else:
+                        idx = np.searchsorted(hs, seam_h)
+                        h_lo, h_hi = hs[idx-1], hs[idx]
+                        r_lo = rs[idx-1]
+                        r_hi = rs[idx]
+                        t = (seam_h - h_lo) / (h_hi - h_lo)
+                        r_interp = r_lo + t * (r_hi - r_lo)
+                        R_measured = float(r_interp)
+            except Exception:
+                R_measured = R_major
             zc_top = seam_h + r_top  # donut net boven de opening
-            th = np.linspace(0, 2*np.pi, 200)
+            th = np.linspace(0, 2*np.pi, 360)
             # Links en/of rechts afhankelijk van view; standaard alleen links tonen
             if view in ("full", "half-left"):
-                x_left = -R_major + r_top * np.cos(th)
+                x_left = -R_measured + r_top * np.cos(th)
                 z_left = zc_top + r_top * np.sin(th)
                 fig.add_trace(go.Scatter(x=x_left, y=z_left, mode='lines', name='Collar (left)', line=dict(color='purple', width=1.5)))
             if show_torus_right and view in ("full", "half-right"):
-                x_right = R_major + r_top * np.cos(th)
+                x_right = R_measured + r_top * np.cos(th)
                 z_right = zc_top + r_top * np.sin(th)
                 fig.add_trace(go.Scatter(x=x_right, y=z_right, mode='lines', name='Collar (right)', line=dict(color='purple', width=1.5)))
     except Exception:
@@ -323,13 +358,34 @@ def create_3d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "
         r_top = float(metrics.get('torus_r_top', 0.0))
         seam_h = float(metrics.get('h_seam_eff', 0.0))
         if R_major > 0 and r_top > 0 and seam_h > 0:
-            # Kraag op opening hoogte
+            # Meet werkelijke naadstraal uit profiel
+            try:
+                dfh = (
+                    df_valid.assign(r_abs=lambda d: d['x_plot'].abs())
+                    .groupby('h')['r_abs'].max().reset_index().sort_values('h')
+                )
+                hs = dfh['h'].to_numpy(dtype=float)
+                rs = dfh['r_abs'].to_numpy(dtype=float)
+                if seam_h <= hs.min():
+                    R_measured = float(dfh.iloc[0]['r_abs'])
+                elif seam_h >= hs.max():
+                    R_measured = float(dfh.iloc[-1]['r_abs'])
+                else:
+                    idx = np.searchsorted(hs, seam_h)
+                    h_lo, h_hi = hs[idx-1], hs[idx]
+                    r_lo = rs[idx-1]
+                    r_hi = rs[idx]
+                    t = (seam_h - h_lo) / (h_hi - h_lo)
+                    r_interp = r_lo + t * (r_hi - r_lo)
+                    R_measured = float(r_interp)
+            except Exception:
+                R_measured = R_major
             zc_top = seam_h + r_top
-            u = np.linspace(0, 2*np.pi, 50)
-            v = np.linspace(0, 2*np.pi, 30)
+            u = np.linspace(0, 2*np.pi, 100)
+            v = np.linspace(0, 2*np.pi, 60)
             U, V = np.meshgrid(u, v)
-            X_t = (R_major + r_top*np.cos(V)) * np.cos(U)
-            Y_t = (R_major + r_top*np.cos(V)) * np.sin(U)
+            X_t = (R_measured + r_top*np.cos(V)) * np.cos(U)
+            Y_t = (R_measured + r_top*np.cos(V)) * np.sin(U)
             Z_t = zc_top + r_top*np.sin(V)
             fig.add_surface(x=X_t, y=Y_t, z=Z_t, colorscale='Purples', showscale=False, opacity=0.6)
     except Exception:

@@ -426,7 +426,7 @@ if st.session_state.df is not None:
     with col_exp1:
         def gen_stl():
             with tempfile.NamedTemporaryFile(delete=False, suffix='.stl') as tmp:
-                if export_to_stl(st.session_state.df, tmp.name):
+                if export_to_stl(st.session_state.df, tmp.name, metrics=st.session_state.metrics):
                     with open(tmp.name, 'rb') as f:
                         return f.read()
             return None
@@ -438,7 +438,7 @@ if st.session_state.df is not None:
     with col_exp2:
         def gen_dxf():
             with tempfile.NamedTemporaryFile(delete=False, suffix='.dxf') as tmp:
-                if export_to_dxf(st.session_state.df, tmp.name):
+                if export_to_dxf(st.session_state.df, tmp.name, metrics=st.session_state.metrics):
                     with open(tmp.name, 'rb') as f:
                         return f.read()
             return None

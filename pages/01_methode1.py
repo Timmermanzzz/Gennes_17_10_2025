@@ -17,7 +17,8 @@ from utils import (
     find_collar_tube_diameter_with_displacement,
 )
 from visualisatie import create_2d_plot, create_3d_plot
-from export import export_to_stl, export_to_dxf
+from export import export_to_stl, export_to_dxf, export_to_step, export_to_3dm
+from pdf_export import export_to_pdf
 import tempfile
 
 st.set_page_config(
@@ -384,6 +385,8 @@ if st.session_state.df is not None:
             st.metric("Opening diameter (m)", "-")
         if st.session_state.metrics.get('volume_afgekapt', 0) > 0:
             st.metric("Collar tube diameter (m)", f"{st.session_state.metrics.get('collar_tube_diameter', 0):.2f}")
+        else:
+            st.metric("Collar tube diameter (m)", "-")
     
     st.markdown("")
     
@@ -421,7 +424,7 @@ if st.session_state.df is not None:
     st.markdown("---")
     st.header("💾 Export")
     
-    col_exp1, col_exp2 = st.columns(2)
+    col_exp1, col_exp2, col_exp3, col_exp4, col_exp5 = st.columns(5)
     
     with col_exp1:
         def gen_stl():
@@ -446,6 +449,52 @@ if st.session_state.df is not None:
         dxf_data = gen_dxf()
         if dxf_data:
             st.download_button("📥 Download DXF", data=dxf_data, file_name="droplet.dxf", mime="application/dxf", use_container_width=True)
+
+    with col_exp3:
+        if st.button("📄 Generate PDF (A3)", use_container_width=True):
+            pdf_bytes = None
+            err = None
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+                    export_to_pdf(st.session_state.df, st.session_state.metrics, tmp.name, physical_params=st.session_state.physical_params)
+                    with open(tmp.name, 'rb') as f:
+                        pdf_bytes = f.read()
+            except Exception as e:
+                err = str(e)
+            if pdf_bytes:
+                st.download_button("📥 Download PDF (A3)", data=pdf_bytes, file_name="droplet_a3.pdf", mime="application/pdf", use_container_width=True)
+            else:
+                st.error(f"PDF genereren mislukt. Controleer of reportlab is geïnstalleerd. Fout: {err}")
+
+    with col_exp4:
+        def gen_step():
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.step') as tmp:
+                ok = export_to_step(st.session_state.df, tmp.name, metrics=st.session_state.metrics)
+                if ok:
+                    with open(tmp.name, 'rb') as f:
+                        return f.read()
+                return None
+        if st.button("↗️ Download STEP", use_container_width=True):
+            step_data = gen_step()
+            if step_data:
+                st.download_button("📥 STEP", data=step_data, file_name="droplet.step", mime="application/step", use_container_width=True)
+            else:
+                st.error("STEP export mislukt. Controleer of pythonocc-core is geïnstalleerd.")
+
+    with col_exp5:
+        def gen_3dm():
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.3dm') as tmp:
+                ok = export_to_3dm(st.session_state.df, tmp.name, metrics=st.session_state.metrics)
+                if ok:
+                    with open(tmp.name, 'rb') as f:
+                        return f.read()
+                return None
+        if st.button("🦏 Download 3DM", use_container_width=True):
+            data3dm = gen_3dm()
+            if data3dm:
+                st.download_button("📥 3DM", data=data3dm, file_name="droplet.3dm", mime="application/octet-stream", use_container_width=True)
+            else:
+                st.error("3DM export mislukt. Controleer of rhino3dm is geïnstalleerd.")
 
 else:
     st.info("👆 Set parameters and click 'Compute Droplet' to begin.")

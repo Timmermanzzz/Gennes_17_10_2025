@@ -5,4 +5,7 @@ plotly
 scipy
 ezdxf
 numpy-stl
+reportlab
+pythonocc-core
+rhino3dm
 

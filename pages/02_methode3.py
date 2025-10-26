@@ -14,7 +14,8 @@ from utils import (
     solve_gamma_for_cut_volume_match
 )
 from visualisatie import create_2d_plot, create_3d_plot
-from export import export_to_stl, export_to_dxf
+from export import export_to_stl, export_to_dxf, export_to_step, export_to_3dm
+from pdf_export import export_to_pdf
 import tempfile
 from io import BytesIO
 
@@ -400,7 +401,7 @@ if st.session_state.df_selected_m3 is not None:
     
     st.header("💾 Export")
     
-    col_exp1, col_exp2 = st.columns(2)
+    col_exp1, col_exp2, col_exp3, col_exp4, col_exp5 = st.columns(5)
     
     with col_exp1:
         def gen_stl():
@@ -441,6 +442,74 @@ if st.session_state.df_selected_m3 is not None:
                 mime="application/dxf",
                 use_container_width=True
             )
+
+    with col_exp3:
+        if st.button("📄 Generate PDF (A3)", use_container_width=True):
+            pdf_bytes = None
+            err = None
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+                    # In method 3 hebben we meestal geen los physical_params; geef None mee
+                    export_to_pdf(st.session_state.df_selected_m3, st.session_state.metrics_selected_m3, tmp.name, physical_params=None)
+                    with open(tmp.name, 'rb') as f:
+                        pdf_bytes = f.read()
+            except Exception as e:
+                err = str(e)
+            if pdf_bytes:
+                tube_val = st.session_state.selected_solution_m3['Tube diameter (m)']
+                st.download_button(
+                    "📥 Download PDF (A3)",
+                    data=pdf_bytes,
+                    file_name=f"droplet_tube{tube_val:.2f}m.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            else:
+                st.error(f"PDF genereren mislukt. Controleer of reportlab is geïnstalleerd. Fout: {err}")
+
+    with col_exp4:
+        def gen_step():
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.step') as tmp:
+                ok = export_to_step(st.session_state.df_selected_m3, tmp.name, metrics=st.session_state.metrics_selected_m3)
+                if ok:
+                    with open(tmp.name, 'rb') as f:
+                        return f.read()
+                return None
+        if st.button("↗️ Download STEP", use_container_width=True):
+            step_data = gen_step()
+            if step_data:
+                tube_val = st.session_state.selected_solution_m3['Tube diameter (m)']
+                st.download_button(
+                    "📥 STEP",
+                    data=step_data,
+                    file_name=f"droplet_tube{tube_val:.2f}m.step",
+                    mime="application/step",
+                    use_container_width=True
+                )
+            else:
+                st.error("STEP export mislukt. Controleer of pythonocc-core is geïnstalleerd.")
+
+    with col_exp5:
+        def gen_3dm():
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.3dm') as tmp:
+                ok = export_to_3dm(st.session_state.df_selected_m3, tmp.name, metrics=st.session_state.metrics_selected_m3)
+                if ok:
+                    with open(tmp.name, 'rb') as f:
+                        return f.read()
+                return None
+        if st.button("🦏 Download 3DM", use_container_width=True):
+            data3dm = gen_3dm()
+            if data3dm:
+                tube_val = st.session_state.selected_solution_m3['Tube diameter (m)']
+                st.download_button(
+                    "📥 3DM",
+                    data=data3dm,
+                    file_name=f"droplet_tube{tube_val:.2f}m.3dm",
+                    mime="application/octet-stream",
+                    use_container_width=True
+                )
+            else:
+                st.error("3DM export mislukt. Controleer of rhino3dm is geïnstalleerd.")
 
 else:
     st.info("👆 Generate solutions and select one to visualise and export.")

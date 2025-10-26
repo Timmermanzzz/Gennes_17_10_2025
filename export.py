@@ -303,3 +303,158 @@ def export_both_formats(df: pd.DataFrame, base_name: str = "druppel",
     
     return stl_filepath, dxf_filepath, success
 
+
+# =============== STEP EXPORT (via pythonocc) ===============
+def export_to_step(df: pd.DataFrame, filepath: str, metrics: dict | None = None) -> bool:
+    """
+    Export 3D solid to STEP using pythonocc-core.
+    Builds a surface of revolution from the 2D profile and (optionally) adds a torus,
+    then writes a STEP file. Falls back gracefully if OCC is unavailable.
+    """
+    try:
+        from OCC.Core.gp import gp_Pnt, gp_Ax1, gp_Dir, gp_Ax2
+        from OCC.Core.GeomAPI import GeomAPI_PointsToBSpline
+        from OCC.Core.TopoDS import TopoDS_Shape
+        from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeRevol, BRepPrimAPI_MakeTorus
+        from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeWire, BRepBuilderAPI_MakeEdge
+        from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Fuse
+        from OCC.Core.STEPControl import STEPControl_Writer, STEPControl_AsIs
+        from OCC.Core.Interface import Interface_Static_SetCVal
+        from OCC.Core.ShapeFix import ShapeFix_Shape
+    except Exception as e:
+        print(f"STEP export unavailable (pythonocc-core not installed?): {e}")
+        return False
+
+    try:
+        # Prepare profile points (x >= 0 for revolution around Z)
+        if 'x_shifted' not in df.columns and 'x-x_0' in df.columns:
+            x_max = df['x-x_0'].max()
+            df = df.copy()
+            df['x_shifted'] = df['x-x_0'] - x_max
+        df_valid = df.dropna(subset=['x_shifted', 'h']).sort_values('h')
+        if df_valid.empty:
+            return False
+        # Build OCC points along (r = -x_shifted, z = h), we rotate around Z
+        pts = []
+        for _, row in df_valid.iterrows():
+            r = float(-row['x_shifted'])  # right edge at 0
+            z = float(row['h'])
+            if r < 0:
+                continue
+            pts.append(gp_Pnt(r, 0.0, z))
+        if len(pts) < 2:
+            return False
+        # BSpline through points
+        bs = GeomAPI_PointsToBSpline(pts).Curve()
+        # Wire
+        edges = [BRepBuilderAPI_MakeEdge(bs).Edge()]
+        wire_mk = BRepBuilderAPI_MakeWire()
+        for e in edges:
+            wire_mk.Add(e)
+        wire = wire_mk.Wire()
+        # Revolve wire around Z axis
+        axis = gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1))
+        solid = BRepPrimAPI_MakeRevol(wire, axis, 2.0 * 3.141592653589793).Shape()
+
+        # Optional torus
+        shape = solid
+        try:
+            if metrics is not None:
+                R_major = float(metrics.get('torus_R_major', 0.0) or 0.0)
+                r_tube = float(metrics.get('collar_tube_diameter', 0.0) or 0.0) / 2.0
+                h_seam = float(metrics.get('h_seam_eff', 0.0) or 0.0)
+                if R_major > 0.0 and r_tube > 0.0 and h_seam > 0.0:
+                    torus = BRepPrimAPI_MakeTorus(R_major, r_tube).Shape()
+                    # Move torus center up by h_seam (center at z = h_seam)
+                    # Simple trick: make a second revolution axis at shifted origin
+                    # Better: use gp_Trsf translation, but keep it minimal here
+                    from OCC.Core.gp import gp_Trsf, gp_Vec
+                    from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
+                    tr = gp_Trsf()
+                    tr.SetTranslation(gp_Vec(0, 0, h_seam))
+                    torus = BRepBuilderAPI_Transform(torus, tr, True).Shape()
+                    shape = BRepAlgoAPI_Fuse(solid, torus).Shape()
+        except Exception:
+            pass
+
+        # Fix shape and write STEP
+        fixer = ShapeFix_Shape(shape)
+        fixer.Perform()
+        shape_fixed = fixer.Shape()
+
+        Interface_Static_SetCVal("write.step.schema", "AP203")
+        writer = STEPControl_Writer()
+        writer.Transfer(shape_fixed, STEPControl_AsIs)
+        status = writer.Write(filepath)
+        return bool(status == 1)
+    except Exception as e:
+        print(f"STEP export error: {e}")
+        return False
+
+
+# =============== 3DM EXPORT (via rhino3dm) ===============
+def export_to_3dm(df: pd.DataFrame, filepath: str, metrics: dict | None = None) -> bool:
+    """
+    Export to Rhino 3DM using rhino3dm. Builds revolve surfaces for the profile
+    and adds a torus surface. Not a boolean fused solid, but opens cleanly in Rhino.
+    """
+    try:
+        import rhino3dm as r3d
+        import numpy as np
+    except Exception as e:
+        print(f"3DM export unavailable (rhino3dm not installed?): {e}")
+        return False
+
+    try:
+        # Ensure x_shifted exists
+        if 'x_shifted' not in df.columns and 'x-x_0' in df.columns:
+            x_max = df['x-x_0'].max()
+            df = df.copy()
+            df['x_shifted'] = df['x-x_0'] - x_max
+        df_valid = df.dropna(subset=['x_shifted', 'h']).sort_values('h')
+        if df_valid.empty:
+            return False
+
+        # Make a polycurve for profile in (r = -x_shifted, z = h) plane (XZ)
+        pts = []
+        for _, row in df_valid.iterrows():
+            r = float(-row['x_shifted'])
+            z = float(row['h'])
+            if r < 0:
+                continue
+            pts.append(r3d.Point3d(r, 0.0, z))
+        if len(pts) < 2:
+            return False
+
+        curve = r3d.Polyline(pts).ToNurbsCurve()
+
+        # Revolve around Z axis to make a surface
+        axis = r3d.Line(r3d.Point3d(0, 0, 0), r3d.Point3d(0, 0, 1))
+        rev = r3d.RevSurface.Create(curve, axis)
+
+        model = r3d.File3dm()
+        if rev:
+            brep = rev.ToBrep()
+            model.Objects.AddBrep(brep)
+
+        # Torus (if present)
+        try:
+            if metrics is not None:
+                R_major = float(metrics.get('torus_R_major', 0.0) or 0.0)
+                r_tube = float(metrics.get('collar_tube_diameter', 0.0) or 0.0) / 2.0
+                h_seam = float(metrics.get('h_seam_eff', 0.0) or 0.0)
+                if R_major > 0.0 and r_tube > 0.0 and h_seam > 0.0:
+                    center = r3d.Point3d(0, 0, h_seam)
+                    axis_torus = r3d.Vector3d(0, 0, 1)
+                    torus = r3d.Torus(r3d.Plane(center, axis_torus), R_major, r_tube)
+                    torus_brep = torus.ToBrep()
+                    model.Objects.AddBrep(torus_brep)
+        except Exception:
+            pass
+
+        model.Write(filepath, 5)
+        return True
+    except Exception as e:
+        print(f"3DM export error: {e}")
+        return False
+

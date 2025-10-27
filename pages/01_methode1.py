@@ -468,18 +468,30 @@ if st.session_state.df is not None:
 
     with col_exp5:
         def gen_3dm():
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.3dm') as tmp:
-                ok = export_to_3dm(st.session_state.df, tmp.name, metrics=st.session_state.metrics)
-                if ok:
-                    with open(tmp.name, 'rb') as f:
-                        return f.read()
-                return None
+            import os, tempfile
+            fd, tmp_path = tempfile.mkstemp(suffix='.3dm')
+            os.close(fd)  # voorkom Windows-lock tijdens schrijven door rhino3dm
+            ok, err = export_to_3dm(st.session_state.df, tmp_path, metrics=st.session_state.metrics)
+            if ok and os.path.exists(tmp_path):
+                with open(tmp_path, 'rb') as f:
+                    data = f.read()
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+                return data, None
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+            return None, err
         if st.button("🦏 Download 3DM", use_container_width=True):
-            data3dm = gen_3dm()
+            data3dm, err = gen_3dm()
             if data3dm:
                 st.download_button("📥 3DM", data=data3dm, file_name="droplet.3dm", mime="application/octet-stream", use_container_width=True)
             else:
-                st.error("3DM export mislukt. Controleer of rhino3dm is geïnstalleerd.")
+                st.error(f"3DM export mislukt. {err or 'Controleer of rhino3dm is geïnstalleerd.'}")
 
 else:
     st.info("👆 Set parameters and click 'Compute Droplet' to begin.")

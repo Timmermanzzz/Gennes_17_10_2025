@@ -393,7 +393,7 @@ def export_to_step(df: pd.DataFrame, filepath: str, metrics: dict | None = None)
 
 
 # =============== 3DM EXPORT (via rhino3dm) ===============
-def export_to_3dm(df: pd.DataFrame, filepath: str, metrics: dict | None = None) -> bool:
+def export_to_3dm(df: pd.DataFrame, filepath: str, metrics: dict | None = None) -> tuple[bool, str | None]:
     """
     Export to Rhino 3DM using rhino3dm. Builds revolve surfaces for the profile
     and adds a torus surface. Not a boolean fused solid, but opens cleanly in Rhino.
@@ -401,9 +401,11 @@ def export_to_3dm(df: pd.DataFrame, filepath: str, metrics: dict | None = None) 
     try:
         import rhino3dm as r3d
         import numpy as np
+        import math
     except Exception as e:
-        print(f"3DM export unavailable (rhino3dm not installed?): {e}")
-        return False
+        msg = f"3DM export unavailable (rhino3dm not installed?): {e}"
+        print(msg)
+        return False, msg
 
     try:
         # Ensure x_shifted exists
@@ -413,7 +415,7 @@ def export_to_3dm(df: pd.DataFrame, filepath: str, metrics: dict | None = None) 
             df['x_shifted'] = df['x-x_0'] - x_max
         df_valid = df.dropna(subset=['x_shifted', 'h']).sort_values('h')
         if df_valid.empty:
-            return False
+            return False, "No valid profile data (x_shifted,h) to export"
 
         # Make a polycurve for profile in (r = -x_shifted, z = h) plane (XZ)
         pts = []
@@ -424,14 +426,15 @@ def export_to_3dm(df: pd.DataFrame, filepath: str, metrics: dict | None = None) 
                 continue
             pts.append(r3d.Point3d(r, 0.0, z))
         if len(pts) < 2:
-            return False
+            return False, f"Not enough profile points after filtering (count={len(pts)})"
 
         # Maak een curve uit punten (PolylineCurve is voldoende voor revolve)
         curve = r3d.PolylineCurve(pts)
 
         # Revolve around Z axis to make a surface
         axis = r3d.Line(r3d.Point3d(0, 0, 0), r3d.Point3d(0, 0, 1))
-        rev = r3d.RevSurface.Create(curve, axis)
+        # Create expects startAngle/endAngle in radians
+        rev = r3d.RevSurface.Create(curve, axis, 0.0, 2.0 * math.pi)
 
         model = r3d.File3dm()
         if rev:
@@ -459,13 +462,23 @@ def export_to_3dm(df: pd.DataFrame, filepath: str, metrics: dict | None = None) 
                     axis_torus = r3d.Vector3d(0, 0, 1)
                     torus = r3d.Torus(r3d.Plane(center, axis_torus), R_major, r_tube)
                     torus_brep = torus.ToBrep()
-                    model.Objects.AddBrep(torus_brep)
+                    if torus_brep:
+                        model.Objects.AddBrep(torus_brep)
         except Exception:
             pass
 
-        model.Write(filepath, 5)
-        return True
+        ok_write = model.Write(filepath, 5)
+        if not ok_write:
+            return False, "File3dm.Write returned False (file not written)."
+        try:
+            # Extra safety: ensure non-empty file
+            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                return True, None
+            return False, "3DM file size is 0 after write."
+        except Exception as _:
+            return True, None
     except Exception as e:
-        print(f"3DM export error: {e}")
-        return False
+        msg = f"3DM export error: {e}"
+        print(msg)
+        return False, msg
 

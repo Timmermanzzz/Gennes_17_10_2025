@@ -426,7 +426,8 @@ def export_to_3dm(df: pd.DataFrame, filepath: str, metrics: dict | None = None) 
         if len(pts) < 2:
             return False
 
-        curve = r3d.Polyline(pts).ToNurbsCurve()
+        # Maak een curve uit punten (PolylineCurve is voldoende voor revolve)
+        curve = r3d.PolylineCurve(pts)
 
         # Revolve around Z axis to make a surface
         axis = r3d.Line(r3d.Point3d(0, 0, 0), r3d.Point3d(0, 0, 1))
@@ -434,8 +435,18 @@ def export_to_3dm(df: pd.DataFrame, filepath: str, metrics: dict | None = None) 
 
         model = r3d.File3dm()
         if rev:
-            brep = rev.ToBrep()
-            model.Objects.AddBrep(brep)
+            try:
+                breps = r3d.Brep.CreateFromRevSurface(rev, True, True)
+                if breps:
+                    for b in breps:
+                        model.Objects.AddBrep(b)
+                else:
+                    model.Objects.AddCurve(curve)
+            except Exception:
+                model.Objects.AddCurve(curve)
+        else:
+            # Fallback: schrijf alleen de curve zodat gebruiker kan revolven in Rhino
+            model.Objects.AddCurve(curve)
 
         # Torus (if present)
         try:

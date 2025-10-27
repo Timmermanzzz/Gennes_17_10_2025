@@ -3,6 +3,7 @@ De Gennes Droplet Shape Calculator - Homepage
 """
 
 import streamlit as st
+from auth import require_password
 
 st.set_page_config(
     page_title="De Gennes Droplet Shape Calculator",
@@ -10,6 +11,28 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# ---- Simple password gate ----
+def _require_password() -> None:
+    """Stop rendering until the correct password is provided."""
+    correct = "buitink"
+    if st.session_state.get("auth_ok", False):
+        return
+    def _on_enter():
+        if st.session_state.get("app_password", "") == correct:
+            st.session_state["auth_ok"] = True
+            try:
+                del st.session_state["app_password"]
+            except Exception:
+                pass
+        else:
+            st.session_state["auth_ok"] = False
+    st.sidebar.text_input("Password", type="password", key="app_password", on_change=_on_enter)
+    if not st.session_state.get("auth_ok", False):
+        st.warning("Enter password to continue.")
+        st.stop()
+
+require_password()
 
 st.title("💧 De Gennes Droplet Shape Calculator")
 st.markdown("*Based on Young–Laplace physics*")

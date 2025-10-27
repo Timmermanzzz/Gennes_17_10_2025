@@ -3,6 +3,7 @@ Method 3: Volume-Based Collar Design
 """
 
 import streamlit as st
+from auth import require_password
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -24,6 +25,8 @@ st.set_page_config(
     page_icon="🎯",
     layout="wide"
 )
+
+require_password()
 
 st.title("🎯 Method 3 — Volume-Based Collar Design")
 st.markdown("Find collar tube diameters where collar volume equals cut volume.")

@@ -3,6 +3,7 @@ Method 1: Compute Droplet Shape
 """
 
 import streamlit as st
+from auth import require_password
 import pandas as pd
 import numpy as np
 from solver import generate_droplet_shape, get_physical_parameters
@@ -26,6 +27,8 @@ st.set_page_config(
     page_icon="📊",
     layout="wide"
 )
+
+require_password()
 
 st.title("📊 Method 1 — Compute Droplet Shape")
 st.markdown("Compute droplet shapes for given parameters and choose your cut options.")

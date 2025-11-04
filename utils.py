@@ -5,6 +5,8 @@ Hulpfuncties voor druppelvorm berekeningen.
 import numpy as np
 import pandas as pd
 import bisect
+import logging
+import streamlit as st
 
 
 def shift_x_coordinates(df: pd.DataFrame) -> pd.DataFrame:
@@ -189,6 +191,70 @@ def get_droplet_metrics(df: pd.DataFrame) -> dict:
     }
 
 
+# =============================
+# Console logging (Streamlit)
+# =============================
+
+class _SessionLogHandler(logging.Handler):
+    """Logging-handler die berichten in st.session_state opslaat.
+
+    Gebruik `init_streamlit_logger()` om deze handler aan een logger te koppelen.
+    """
+
+    def __init__(self, key: str = 'console_logs', max_messages: int = 2000) -> None:
+        super().__init__()
+        self.key = key
+        self.max_messages = int(max_messages)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+        except Exception:
+            msg = str(record.getMessage())
+        try:
+            if self.key not in st.session_state:
+                st.session_state[self.key] = []
+            logs = st.session_state[self.key]
+            logs.append(msg)
+            # Beperk lengte (bewaar recentste)
+            if len(logs) > self.max_messages:
+                st.session_state[self.key] = logs[-self.max_messages :]
+        except Exception:
+            # Logging mag nooit crashen
+            pass
+
+
+def init_streamlit_logger(
+    name: str = 'app',
+    level: int = logging.INFO,
+    key: str = 'console_logs',
+    max_messages: int = 2000,
+) -> logging.Logger:
+    """Initialiseer of verkrijg een logger met Streamlit-session handler.
+
+    Retourneert de logger zodat je `logger.info(...)` kunt gebruiken.
+    """
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+    # Voeg handler maar één keer toe
+    if not any(isinstance(h, _SessionLogHandler) for h in logger.handlers):
+        handler = _SessionLogHandler(key=key, max_messages=max_messages)
+        formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s', datefmt='%H:%M:%S')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+    return logger
+
+
+def get_console_logs(key: str = 'console_logs') -> list:
+    """Lees logregels uit de sessie (leeg lijstje als niets aanwezig)."""
+    return list(st.session_state.get(key, []))
+
+
+def clear_console_logs(key: str = 'console_logs') -> None:
+    """Wis logbuffer in de sessie."""
+    st.session_state[key] = []
+
+
 def find_height_for_diameter(df: pd.DataFrame, target_diameter: float,
                              search_points: int = 400,
                              tol: float = 1e-4,
@@ -298,7 +364,7 @@ def _make_df_with_cuts(gamma_s: float, rho: float, g: float,
         # Voeg vlakke top toe aan de RECHTER rand (0..R) voor consistente 2D/3D
         target_radius = float(cut_diameter) / 2.0
         n_points = 30
-        x_shifted_vals = np.linspace(0.0, target_radius, n_points)
+        x_shifted_vals = np.linspace(-target_radius, 0.0, n_points)
         x_max_current = df['x-x_0'].max() if 'x-x_0' in df.columns else 0.0
         top_points = pd.DataFrame({
             'B': 1.0,

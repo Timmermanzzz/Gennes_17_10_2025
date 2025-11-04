@@ -153,7 +153,7 @@ if st.button("🔬 Generate Solutions Table", type="primary", use_container_widt
             # Voeg vlakke top toe
             target_radius = cut_diameter_m3 / 2.0
             n_points = 30
-            x_shifted_vals = np.linspace(0.0, target_radius, n_points)
+            x_shifted_vals = np.linspace(-target_radius, 0.0, n_points)
             top_points_data = []
             x_max_current = df_cut_raw['x-x_0'].max() if 'x-x_0' in df_cut_raw.columns else 0.0
             for x_sh in x_shifted_vals:
@@ -213,7 +213,7 @@ if st.button("🔬 Generate Solutions Table", type="primary", use_container_widt
                 try:
                     if df_cut_gamma is not None and not df_cut_gamma.empty and not np.isnan(h_cut_gamma):
                         n_points = 30
-                        x_shifted_vals = np.linspace(0.0, R_major, n_points)
+                        x_shifted_vals = np.linspace(-R_major, 0.0, n_points)
                         x_max_current = df_cut_gamma['x-x_0'].max() if 'x-x_0' in df_cut_gamma.columns else 0.0
                         top_points_gamma = pd.DataFrame({
                             'B': 1.0, 'C': 1.0, 'z': 0,

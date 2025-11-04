@@ -7,6 +7,8 @@ from auth import require_password
 import pandas as pd
 import numpy as np
 from solver import generate_droplet_shape, get_physical_parameters
+import solver as solver_mod  # module import zodat we kunnen reloaden
+import importlib
 from utils import (
     shift_x_coordinates,
     get_droplet_metrics,
@@ -16,6 +18,9 @@ from utils import (
     calculate_diameter_at_height,
     find_collar_tube_diameter_for_volume,
     find_collar_tube_diameter_with_displacement,
+    init_streamlit_logger,
+    get_console_logs,
+    clear_console_logs,
 )
 from visualisatie import create_2d_plot, create_3d_plot
 from export import export_to_stl, export_to_dxf, export_to_3dm
@@ -29,6 +34,9 @@ st.set_page_config(
 )
 
 require_password()
+
+# Console logger voor debug
+logger = init_streamlit_logger(name='method1', level=20)
 
 st.title("📊 Method 1 — Compute Droplet Shape")
 st.markdown("Compute droplet shapes for given parameters and choose your cut options.")
@@ -68,6 +76,12 @@ st.markdown("---")
 
 st.header("⚙️ Parameters")
 
+# Physics model selector
+physics_model = st.selectbox(
+    "Physics model",
+    ["Young–Laplace (de Gennes)", "Timoshenko (membrane)"]
+)
+
 # Row 1: Physical properties
 col1, col2, col3 = st.columns(3)
 
@@ -100,6 +114,37 @@ with col3:
         step=0.1,
         help="Gravitatieversnelling (standaard 9.8 op aarde)"
     )
+
+# Extra parameters voor Timoshenko
+if physics_model == "Timoshenko (membrane)":
+    col_t1, col_t2, col_t3 = st.columns(3)
+    with col_t1:
+        N_timo = st.number_input(
+            "N - Membrane force (N/m)",
+            min_value=1000.0,
+            max_value=1_000_000.0,
+            value=27500.0,
+            step=500.0,
+            help="Membraankracht per eenheid omtrek"
+        )
+    with col_t2:
+        top_pressure = st.number_input(
+            "P₀ - Top pressure (Pa)",
+            min_value=0.0,
+            max_value=100000.0,
+            value=100.0,
+            step=10.0,
+            help="Druk bovenin; bepaalt head d = P₀/(ρg)"
+        )
+    with col_t3:
+        phi_max_deg = st.slider(
+            "φ max (deg)",
+            min_value=60,
+            max_value=170,
+            value=120,
+            step=5,
+            help="Stopcriterium voor integratie (veilig weg van u→1)"
+        )
 
 # Row 2: Shape adjustment
 col4, col5 = st.columns([1, 1])
@@ -171,11 +216,58 @@ with col5:
     if st.button("🔬 Compute Droplet", type="primary", use_container_width=True):
         with st.spinner("Computing..."):
             try:
-                # Generate full droplet first
-                df_full = generate_droplet_shape(gamma_s, rho, g, cut_percentage=0)
-                full_metrics = get_droplet_metrics(df_full)
-                full_basis_diameter = full_metrics['bottom_diameter']
-                full_max_diameter = full_metrics['max_diameter']
+                logger.info("Start compute | model=%s", physics_model)
+                logger.info("rho=%.3f kg/m^3, g=%.3f m/s^2", float(rho), float(g))
+                if physics_model == "Timoshenko (membrane)":
+                    logger.info("N=%.2f N/m, P0=%.2f Pa, phi_max=%d deg", float(N_timo), float(top_pressure), int(phi_max_deg))
+                else:
+                    logger.info("gamma_s=%.1f N/m", float(gamma_s))
+                # Generate full shape (per selected model)
+                physical_params = None
+                if physics_model == "Young–Laplace (de Gennes)":
+                    df_full = generate_droplet_shape(gamma_s, rho, g, cut_percentage=0)
+                    full_metrics = get_droplet_metrics(df_full)
+                    full_basis_diameter = full_metrics['bottom_diameter']
+                    full_max_diameter = full_metrics['max_diameter']
+                    physical_params = get_physical_parameters(df_full, gamma_s, rho, g)
+                else:
+                    # Timoshenko membrane (forceer module-reload zodat edits direct gelden)
+                    try:
+                        importlib.reload(solver_mod)
+                    except Exception:
+                        pass
+                    df_timo, info_timo = solver_mod.solve_timoshenko_membrane(
+                        rho=float(rho), g=float(g), N=float(N_timo), top_pressure=float(top_pressure), phi_max_deg=float(phi_max_deg)
+                    )
+                    logger.info("Timo solved | steps=%s, steps_z=%s, reason=%s, head_d=%.4f, r1_apex=%.2f",
+                                info_timo.get('steps'), info_timo.get('steps_z'), info_timo.get('stopped_reason'), info_timo.get('head_d'), info_timo.get('r1_apex'))
+                    import numpy as _np
+                    z_arr = _np.asarray(df_timo['z'], dtype=float)
+                    x_arr = _np.asarray(df_timo['x'], dtype=float)
+                    H_max = float(_np.max(z_arr)) if len(z_arr) else 0.0
+                    h_arr = H_max - z_arr
+                    df_full = pd.DataFrame({'h': h_arr, 'x-x_0': x_arr})
+                    # Belangrijk: Timoshenko x is al de straal t.o.v. de as.
+                    # Voor correcte volumes/plotten markeren we dit expliciet als 'x_shifted'
+                    # met de rechterrand op 0 (dus links negatief): x_shifted = -x.
+                    try:
+                        df_full['x_shifted'] = -pd.Series(x_arr, dtype=float)
+                    except Exception:
+                        pass
+                    if len(df_full) > 1:
+                        logger.info("Timo profile | H_max=%.4f m, R_max=%.4f m", float(df_full['h'].max()), float(abs(df_full['x-x_0']).max()))
+                    full_metrics = get_droplet_metrics(df_full)
+                    full_basis_diameter = full_metrics['bottom_diameter']
+                    full_max_diameter = full_metrics['max_diameter']
+                    physical_params = {
+                        'model': 'timoshenko',
+                        'rho': float(rho),
+                        'g': float(g),
+                        'N': float(N_timo),
+                        'top_pressure': float(top_pressure),
+                        'head_d': float(info_timo.get('head_d', 0.0)),
+                        'r1_apex': float(info_timo.get('r1_apex', 0.0))
+                    }
                 
                 df = df_full.copy()
                 actual_cut_diameter = None
@@ -184,13 +276,14 @@ with col5:
                 if use_diameter_mode and cut_diameter > 0:
                     cut_at_height = find_height_for_diameter(df, cut_diameter)
                     if not np.isnan(cut_at_height):
+                        logger.info("Cut by diameter | D=%.3f m → h_cut=%.4f m", float(cut_diameter), float(cut_at_height))
                         df = df[df['h'] <= cut_at_height].copy()
                         # Bewaar profiel VOOR top-toevoeging voor volume berekening
                         df_before_top = df.copy()
                         target_radius = cut_diameter / 2.0
                         n_points = 30
                         # Plaats vlakke top aan de rechterkant [0, R] zodat deze naar rechts wijst
-                        x_shifted_vals = np.linspace(0.0, target_radius, n_points)
+                        x_shifted_vals = np.linspace(-target_radius, 0.0, n_points)
                         top_points_data = []
                         x_max_current = df['x-x_0'].max() if 'x-x_0' in df.columns else 0.0
                         for x_sh in x_shifted_vals:
@@ -207,9 +300,36 @@ with col5:
                         actual_cut_diameter = cut_diameter
                 
                 if use_percentage_mode and cut_percentage > 0:
-                    df = generate_droplet_shape(gamma_s, rho, g, cut_percentage=int(cut_percentage))
+                    if physics_model == "Young–Laplace (de Gennes)":
+                        df = generate_droplet_shape(gamma_s, rho, g, cut_percentage=int(cut_percentage))
+                    else:
+                        # Cut Timoshenko at relative height and add flat top
+                        h_max_local = float(df['h'].max()) if not df.empty else 0.0
+                        cut_at_height = h_max_local * (1.0 - int(cut_percentage) / 100.0)
+                        logger.info("Cut by %% | pct=%d → h_cut=%.4f m", int(cut_percentage), float(cut_at_height))
+                        df = df[df['h'] <= cut_at_height].copy()
+                        df_before_top = df.copy()
+                        if not df.empty:
+                            x_max_current = df['x-x_0'].max() if 'x-x_0' in df.columns else 0.0
+                            # schat target radius uit doorsnede op hoogste h
+                            try:
+                                target_radius = abs(float(df[df['h'] == df['h'].max()]['x-x_0'].min()))
+                            except Exception:
+                                target_radius = 0.0
+                            n_points = 30
+                            x_shifted_vals = np.linspace(-target_radius, 0.0, n_points)
+                            top_points = pd.DataFrame({
+                                'B': 1.0,
+                                'C': 1.0,
+                                'z': 0.0,
+                                'x-x_0': x_shifted_vals + x_max_current,
+                                'x_shifted': x_shifted_vals,
+                                'h': cut_at_height
+                            })
+                            subset_cols = ['x-x_0', 'h'] if 'x-x_0' in df.columns else ['x_shifted', 'h']
+                            df = pd.concat([df, top_points], ignore_index=True).drop_duplicates(subset=subset_cols, keep='first').reset_index(drop=True)
                 
-                if use_volume_constraint and target_volume > 0 and not use_height_constraint:
+                if physics_model == "Young–Laplace (de Gennes)" and use_volume_constraint and target_volume > 0 and not use_height_constraint:
                     cut_pct = int(cut_percentage) if use_percentage_mode else 0
                     cut_diam = float(actual_cut_diameter or 0.0) if use_diameter_mode else 0.0
                     gamma_opt, df_opt, vol_opt = solve_gamma_for_volume(
@@ -219,7 +339,7 @@ with col5:
                     df = df_opt
                     gamma_s = gamma_opt
                 
-                if use_height_constraint and target_height > 0:
+                if physics_model == "Young–Laplace (de Gennes)" and use_height_constraint and target_height > 0:
                     cut_pct = int(cut_percentage) if use_percentage_mode else 0
                     cut_diam = float(actual_cut_diameter or 0.0) if use_diameter_mode else 0.0
                     gamma_opt, df_opt, h_opt = solve_gamma_for_height(
@@ -232,14 +352,26 @@ with col5:
                     if use_diameter_mode and cut_diam > 0:
                         actual_cut_diameter = cut_diam
                 
-                df_full_final = generate_droplet_shape(gamma_s, rho, g, cut_percentage=0)
+                if physics_model == "Young–Laplace (de Gennes)":
+                    df_full_final = generate_droplet_shape(gamma_s, rho, g, cut_percentage=0)
+                else:
+                    df_full_final = df_full.copy()
                 full_metrics_final = get_droplet_metrics(df_full_final)
                 full_basis_diameter_final = full_metrics_final['bottom_diameter']
                 full_max_diameter_final = full_metrics_final['max_diameter']
                 full_max_height_final = full_metrics_final['max_height']
                 
                 metrics = get_droplet_metrics(df)
-                physical_params = get_physical_parameters(df, gamma_s, rho, g)
+                if physics_model == "Young–Laplace (de Gennes)":
+                    physical_params = get_physical_parameters(df, gamma_s, rho, g)
+                else:
+                    # Voor Timoshenko: gebruik volume uit de ODE (π∫x^2 dz) voor precisie
+                    try:
+                        metrics['volume'] = float(info_timo.get('volume', metrics.get('volume', 0.0)))
+                    except Exception:
+                        pass
+                    # Base diameter blijft wat de metriekfunctie berekent: diameter op laagste h
+                logger.info("Metrics | V=%.3f m^3, H=%.3f m, Dmax=%.3f m", float(metrics.get('volume', 0.0)), float(metrics.get('max_height', 0.0)), float(metrics.get('max_diameter', 0.0)))
                 
                 if actual_cut_diameter is not None:
                     metrics['top_diameter'] = actual_cut_diameter
@@ -343,6 +475,8 @@ with col5:
                     st.success("✅ Computation successful!")
                 
             except Exception as e:
+                import traceback
+                logger.exception("Computation error: %s", str(e))
                 st.error(f"❌ Error: {str(e)}")
 
 st.markdown("---")
@@ -397,8 +531,13 @@ if st.session_state.df is not None:
     st.subheader("⚙️ Material")
     col3, col4 = st.columns(2)
     
-    with col3:
-        st.metric("γₛ (N/m)", f"{st.session_state.physical_params.get('gamma_s', 0):.0f}")
+    if st.session_state.physical_params and 'N' in st.session_state.physical_params:
+        with col3:
+            st.metric("N (N/m)", f"{st.session_state.physical_params.get('N', 0):.0f}")
+            st.metric("head d (m)", f"{st.session_state.physical_params.get('head_d', 0.0):.3f}")
+    else:
+        with col3:
+            st.metric("γₛ (N/m)", f"{st.session_state.physical_params.get('gamma_s', 0):.0f}")
     with col4:
         if st.session_state.metrics.get('volume_afgekapt', 0) > 0:
             st.metric("Cut volume (m³)", f"{st.session_state.metrics.get('volume_afgekapt', 0):.2f}")
@@ -498,3 +637,12 @@ if st.session_state.df is not None:
 
 else:
     st.info("👆 Set parameters and click 'Compute Droplet' to begin.")
+
+st.markdown("---")
+st.header("🖥️ Console")
+col_log1, col_log2 = st.columns([1, 0.2])
+with col_log2:
+    if st.button("Clear logs", use_container_width=True):
+        clear_console_logs()
+logs = "\n".join(get_console_logs())
+st.code(logs or "(no logs yet)")

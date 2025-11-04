@@ -872,3 +872,391 @@ def solve_gamma_for_cut_volume_match(
             g_lo, f_lo, df_lo, cv_lo = g_mid, f_mid, df_mid, cv_mid
 
     return best_gamma, best_df, best_cv
+
+
+# =============================
+# Timoshenko optimisaties (N-variatie)
+# =============================
+
+def _timo_df_with_cuts(
+    N: float,
+    rho: float,
+    g: float,
+    top_pressure: float,
+    phi_max_deg: float,
+    cut_percentage: int = 0,
+    cut_diameter: float = 0.0,
+) -> pd.DataFrame:
+    """
+    Bouw Timoshenko-profiel voor gegeven N en pas optionele afkap toe.
+    Retourneert df met kolommen ['h','x-x_0','x_shifted'].
+    """
+    from solver import solve_timoshenko_membrane
+    import numpy as _np
+
+    df_timo, info_timo = solve_timoshenko_membrane(
+        rho=float(rho), g=float(g), N=float(N), top_pressure=float(top_pressure), phi_max_deg=float(phi_max_deg)
+    )
+    z_arr = _np.asarray(df_timo['z'], dtype=float)
+    x_arr = _np.asarray(df_timo['x'], dtype=float)
+    H_max = float(_np.max(z_arr)) if len(z_arr) else 0.0
+    h_arr = H_max - z_arr
+    df_full = pd.DataFrame({'h': h_arr, 'x-x_0': x_arr})
+    try:
+        df_full['x_shifted'] = -pd.Series(x_arr, dtype=float)
+    except Exception:
+        pass
+
+    # Geen afkap
+    if (not cut_diameter or cut_diameter <= 0) and (not cut_percentage or int(cut_percentage) <= 0):
+        return df_full
+
+    # Cut by diameter
+    if cut_diameter and cut_diameter > 0:
+        h_cut = find_height_for_diameter(df_full, float(cut_diameter))
+        if np.isnan(h_cut):
+            return df_full
+        df = df_full[df_full['h'] <= h_cut].copy()
+        # vlakke top links [-R,0]
+        R = float(cut_diameter) / 2.0
+        n_points = 30
+        x_sh = np.linspace(-R, 0.0, n_points)
+        x_max_current = df['x-x_0'].max() if 'x-x_0' in df.columns else 0.0
+        top_points = pd.DataFrame({
+            'B': 1.0,
+            'C': 1.0,
+            'z': 0.0,
+            'x-x_0': x_sh + x_max_current,
+            'x_shifted': x_sh,
+            'h': h_cut
+        })
+        df = pd.concat([df, top_points], ignore_index=True)
+        return df
+
+    # Cut by percentage
+    h_max_local = float(df_full['h'].max()) if not df_full.empty else 0.0
+    h_cut = h_max_local * (1.0 - int(cut_percentage) / 100.0)
+    df = df_full[df_full['h'] <= h_cut].copy()
+    if df.empty:
+        return df_full
+    x_max_current = df['x-x_0'].max() if 'x-x_0' in df.columns else 0.0
+    try:
+        # radius op top benaderen
+        target_radius = abs(float(df[df['h'] == df['h'].max()]['x-x_0'].min()))
+    except Exception:
+        target_radius = 0.0
+    n_points = 30
+    x_sh = np.linspace(-target_radius, 0.0, n_points)
+    top_points = pd.DataFrame({
+        'B': 1.0,
+        'C': 1.0,
+        'z': 0.0,
+        'x-x_0': x_sh + x_max_current,
+        'x_shifted': x_sh,
+        'h': h_cut
+    })
+    df = pd.concat([df, top_points], ignore_index=True)
+    return df
+
+
+def solve_timo_for_height(
+    target_height: float,
+    rho: float,
+    g: float,
+    top_pressure: float,
+    phi_max_deg: float,
+    cut_percentage: int = 0,
+    cut_diameter: float = 0.0,
+    N_min: float = 5_000.0,
+    N_max: float = 1_000_000.0,
+    max_iter: int = 30,
+    rel_tol: float = 1e-3,
+) -> tuple:
+    """
+    Varieer N zodat de maximale hoogte (na afkap) ≈ target_height.
+    Retourneert (N_opt, df_opt, h_opt).
+    """
+    def height_for_N(N_val: float):
+        df_local = _timo_df_with_cuts(N_val, rho, g, top_pressure, phi_max_deg, cut_percentage, cut_diameter)
+        if df_local is None or df_local.empty:
+            return np.nan, df_local
+        h = float(df_local['h'].max())
+        return h, df_local
+
+    h_min, df_min = height_for_N(N_min)
+    h_max, df_max = height_for_N(N_max)
+
+    # Bracket uitbreiden
+    expand = 0
+    while not (h_min <= target_height <= h_max) and expand < 12:
+        if target_height < h_min:
+            N_min = max(100.0, N_min * 0.5)
+            h_min, df_min = height_for_N(N_min)
+        else:
+            N_max = N_max * 2.0
+            h_max, df_max = height_for_N(N_max)
+        expand += 1
+
+    if not (h_min <= target_height <= h_max):
+        # dichtstbijzijnde teruggeven
+        if abs(h_min - target_height) <= abs(h_max - target_height):
+            return N_min, df_min, h_min
+        return N_max, df_max, h_max
+
+    left, right = N_min, N_max
+    best_df, best_h, best_N = df_min, h_min, N_min
+    for _ in range(max_iter):
+        mid = 0.5 * (left + right)
+        h_mid, df_mid = height_for_N(mid)
+        if abs(h_mid - target_height) < abs(best_h - target_height):
+            best_df, best_h, best_N = df_mid, h_mid, mid
+        if target_height > 0 and abs(h_mid - target_height) / target_height < rel_tol:
+            return mid, df_mid, h_mid
+        if h_mid < target_height:
+            left = mid
+        else:
+            right = mid
+    h_opt, df_opt = height_for_N(best_N)
+    return best_N, df_opt, h_opt
+
+
+def solve_timo_for_volume(
+    target_volume: float,
+    rho: float,
+    g: float,
+    top_pressure: float,
+    phi_max_deg: float,
+    cut_percentage: int = 0,
+    cut_diameter: float = 0.0,
+    N_min: float = 5_000.0,
+    N_max: float = 1_000_000.0,
+    max_iter: int = 30,
+    rel_tol: float = 1e-3,
+) -> tuple:
+    """
+    Varieer N zodat het volume (na afkap) ≈ target_volume.
+    Retourneert (N_opt, df_opt, V_opt).
+    """
+    def volume_for_N(N_val: float):
+        df_local = _timo_df_with_cuts(N_val, rho, g, top_pressure, phi_max_deg, cut_percentage, cut_diameter)
+        V = calculate_volume(df_local)
+        return V, df_local
+
+    V_min, df_min = volume_for_N(N_min)
+    V_max, df_max = volume_for_N(N_max)
+
+    expand = 0
+    while not (V_min <= target_volume <= V_max) and expand < 12:
+        if target_volume < V_min:
+            N_min = max(100.0, N_min * 0.5)
+            V_min, df_min = volume_for_N(N_min)
+        else:
+            N_max = N_max * 2.0
+            V_max, df_max = volume_for_N(N_max)
+        expand += 1
+
+    if not (V_min <= target_volume <= V_max):
+        if abs(V_min - target_volume) <= abs(V_max - target_volume):
+            return N_min, df_min, V_min
+        return N_max, df_max, V_max
+
+    left, right = N_min, N_max
+    best_df, best_V, best_N = df_min, V_min, N_min
+    for _ in range(max_iter):
+        mid = 0.5 * (left + right)
+        V_mid, df_mid = volume_for_N(mid)
+        if abs(V_mid - target_volume) < abs(best_V - target_volume):
+            best_df, best_V, best_N = df_mid, V_mid, mid
+        if target_volume > 0 and abs(V_mid - target_volume) / target_volume < rel_tol:
+            return mid, df_mid, V_mid
+        if V_mid < target_volume:
+            left = mid
+        else:
+            right = mid
+    V_opt, df_opt = volume_for_N(best_N)
+    return best_N, df_opt, V_opt
+
+
+def solve_timo_for_cut_volume_match(
+    target_cut_volume: float,
+    rho: float,
+    g: float,
+    cut_diameter: float,
+    top_pressure: float,
+    phi_max_deg: float,
+    N_min: float = 5_000.0,
+    N_max: float = 1_000_000.0,
+    max_iter: int = 30,
+    rel_tol: float = 1e-3,
+) -> tuple:
+    """
+    Zoek N (YS) zodat (V_full(N) - V_trunc(N, cut_diameter)) == target_cut_volume.
+    Retourneert (N_opt, df_trunc_opt, cut_volume_opt).
+    """
+    from solver import solve_timoshenko_membrane
+
+    def cut_volume_for_N(N_val: float):
+        try:
+            df_timo, _info = solve_timoshenko_membrane(
+                rho=float(rho), g=float(g), N=float(N_val), top_pressure=float(top_pressure), phi_max_deg=float(phi_max_deg)
+            )
+            import numpy as _np
+            z = _np.asarray(df_timo['z'], dtype=float)
+            x = _np.asarray(df_timo['x'], dtype=float)
+            H_max = float(_np.max(z)) if len(z) else 0.0
+            h = H_max - z
+            df_full = pd.DataFrame({'h': h, 'x-x_0': x})
+            try:
+                df_full['x_shifted'] = -pd.Series(x, dtype=float)
+            except Exception:
+                pass
+            h_cut = find_height_for_diameter(df_full, float(cut_diameter))
+            if np.isnan(h_cut):
+                return 0.0, df_full, False
+            df_trunc = df_full[df_full['h'] <= h_cut].copy()
+            vol_full = calculate_volume(df_full)
+            vol_trunc = calculate_volume(df_trunc)
+            cut_vol = max(0.0, float(vol_full) - float(vol_trunc))
+            return cut_vol, df_trunc, True
+        except Exception:
+            return 0.0, None, False
+
+    # Logscan / bracket uitbreiding
+    samples = []
+    try:
+        import numpy as _np
+        N_vals = _np.logspace(_np.log10(max(100.0, N_min)), _np.log10(max(N_max, N_min * 10.0)), num=20)
+    except Exception:
+        N_vals = [N_min, 0.5*(N_min+N_max), N_max]
+    for Nv in N_vals:
+        cv, df_t, ok = cut_volume_for_N(float(Nv))
+        if ok:
+            samples.append((float(Nv), float(cv), df_t))
+
+    if not samples:
+        cv, df_t, _ = cut_volume_for_N(float(N_max))
+        return float(N_max), (df_t if df_t is not None else None), float(cv)
+
+    # Vind tekenwissel van f(N) = cv - target
+    left = None
+    right = None
+    for i in range(len(samples) - 1):
+        f1 = samples[i][1] - float(target_cut_volume)
+        f2 = samples[i + 1][1] - float(target_cut_volume)
+        if f1 == 0.0:
+            return samples[i][0], samples[i][2], samples[i][1]
+        if f1 * f2 < 0.0:
+            left = samples[i]
+            right = samples[i + 1]
+            break
+
+    # Geen echte bracket → kies dichtstbijzijnde
+    if left is None or right is None:
+        best = min(samples, key=lambda s: abs(s[1] - float(target_cut_volume)))
+        return best[0], best[2], best[1]
+
+    # Bisection in [left.N, right.N]
+    N_lo, cv_lo, df_lo = left
+    N_hi, cv_hi, df_hi = right
+    best_N, best_df, best_cv, best_err = (N_lo, df_lo, cv_lo, abs(cv_lo - float(target_cut_volume)))
+    for _ in range(max_iter):
+        N_mid = 0.5 * (N_lo + N_hi)
+        cv_mid, df_mid, ok = cut_volume_for_N(N_mid)
+        if not ok:
+            N_lo = N_mid
+            continue
+        err = abs(cv_mid - float(target_cut_volume))
+        if err < best_err:
+            best_N, best_df, best_cv, best_err = (N_mid, df_mid, cv_mid, err)
+        if target_cut_volume > 0 and (err / target_cut_volume) < rel_tol:
+            return N_mid, df_mid, cv_mid
+        f_lo = cv_lo - float(target_cut_volume)
+        f_mid = cv_mid - float(target_cut_volume)
+        if f_lo * f_mid <= 0.0:
+            N_hi, cv_hi, df_hi = N_mid, cv_mid, df_mid
+        else:
+            N_lo, cv_lo, df_lo = N_mid, cv_mid, df_mid
+
+    return best_N, best_df, best_cv
+
+
+# =============================
+# Oppervlakte-berekeningen
+# =============================
+
+def calculate_reservoir_surface_area(df: pd.DataFrame, include_bottom_disc: bool = True) -> float:
+    """
+    Bereken het buitenoppervlak (m²) van het reservoir als omwentelingslichaam.
+
+    - Mantel: A_side = 2π ∑ r_bar * sqrt(1 + (dr/dh)^2) * dh
+    - Bodem: optioneel schijfoppervlak π r_bottom^2
+    - Open top wordt NIET gesloten (geen deksel toevoegen)
+
+    Vereist kolommen: 'h' en 'x_shifted' (of 'x-x_0' → wordt geconstrueerd).
+    """
+    try:
+        if df is None or df.empty:
+            return float('nan')
+
+        # Zorg dat x_shifted bestaat
+        if 'x_shifted' not in df.columns and 'x-x_0' in df.columns:
+            x_max = df['x-x_0'].max()
+            df = df.copy()
+            df['x_shifted'] = df['x-x_0'] - x_max
+
+        df_valid = (
+            df.dropna(subset=['x_shifted', 'h'])
+              .copy()
+        )
+        if df_valid.empty:
+            return float('nan')
+
+        # Neem per hoogte de grootste straal (abs), zodat vlakke top (meerdere punten) 1 radius geeft
+        grp = (
+            df_valid.assign(r_abs=lambda d: d['x_shifted'].abs())
+                    .groupby('h', as_index=False)['r_abs'].max()
+                    .sort_values('h')
+        )
+        h_vals = grp['h'].to_numpy(dtype=float)
+        r_vals = grp['r_abs'].to_numpy(dtype=float)
+
+        if len(h_vals) < 2:
+            r_bottom = float(r_vals[0]) if len(r_vals) else 0.0
+            return (float(np.pi * r_bottom * r_bottom) if include_bottom_disc and r_bottom > 0 else 0.0)
+
+        # Discrete integratie voor mantel
+        dh = np.diff(h_vals)
+        dr = np.diff(r_vals)
+        r_bar = 0.5 * (r_vals[:-1] + r_vals[1:])
+        slope = np.divide(dr, dh, out=np.zeros_like(dr), where=dh!=0)
+        seg_len = np.sqrt(1.0 + slope * slope)
+        A_side = 2.0 * np.pi * float(np.sum(r_bar * seg_len * dh))
+
+        # Bodemschijf (onderste hoogte)
+        r_bottom = float(r_vals[0])
+        A_bottom = float(np.pi * r_bottom * r_bottom) if include_bottom_disc and r_bottom > 0.0 else 0.0
+
+        return float(A_side + A_bottom)
+    except Exception:
+        return float('nan')
+
+
+def calculate_torus_surface_area(metrics: dict | None) -> float:
+    """
+    Buitengebied (m²) van een torus met grote straal R en buisstraal r: A = 4π² R r.
+    Leest R en r uit metrics ('torus_R_major', 'collar_tube_diameter' of 'torus_r_top').
+    Retourneert 0 als niet aanwezig.
+    """
+    try:
+        if not metrics:
+            return 0.0
+        import math
+        R = float(metrics.get('torus_R_major', 0.0) or 0.0)
+        r = float(metrics.get('collar_tube_diameter', 0.0) or 0.0) / 2.0
+        if r <= 0.0:
+            r = float(metrics.get('torus_r_top', 0.0) or 0.0)
+        if R <= 0.0 or r <= 0.0:
+            return 0.0
+        return float(4.0 * (math.pi ** 2) * R * r)
+    except Exception:
+        return 0.0

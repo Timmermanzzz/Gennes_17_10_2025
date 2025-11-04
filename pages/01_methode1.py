@@ -15,12 +15,16 @@ from utils import (
     find_height_for_diameter,
     solve_gamma_for_volume,
     solve_gamma_for_height,
+    solve_timo_for_height,
+    solve_timo_for_volume,
     calculate_diameter_at_height,
     find_collar_tube_diameter_for_volume,
     find_collar_tube_diameter_with_displacement,
     init_streamlit_logger,
     get_console_logs,
     clear_console_logs,
+    calculate_reservoir_surface_area,
+    calculate_torus_surface_area,
 )
 from visualisatie import create_2d_plot, create_3d_plot
 from export import export_to_stl, export_to_dxf, export_to_3dm
@@ -120,12 +124,12 @@ if physics_model == "Timoshenko (membrane)":
     col_t1, col_t2, col_t3 = st.columns(3)
     with col_t1:
         N_timo = st.number_input(
-            "N - Membrane force (N/m)",
+            "YS - Membrane tension (N/m)",
             min_value=1000.0,
             max_value=1_000_000.0,
             value=27500.0,
             step=500.0,
-            help="Membraankracht per eenheid omtrek"
+            help="Effectieve membraanspanning (N per omtrek). Wordt geoptimaliseerd bij Enforce."
         )
     with col_t2:
         top_pressure = st.number_input(
@@ -352,10 +356,51 @@ with col5:
                     if use_diameter_mode and cut_diam > 0:
                         actual_cut_diameter = cut_diam
                 
+                # Timoshenko: optimaliseer N wanneer enforce is gevraagd
+                if physics_model == "Timoshenko (membrane)":
+                    cut_pct = int(cut_percentage) if use_percentage_mode else 0
+                    cut_diam = float(actual_cut_diameter or 0.0) if use_diameter_mode else 0.0
+                    if use_height_constraint and target_height > 0:
+                        N_opt, df_opt, h_opt = solve_timo_for_height(
+                            target_height=float(target_height),
+                            rho=float(rho), g=float(g),
+                            top_pressure=float(top_pressure), phi_max_deg=float(phi_max_deg),
+                            cut_percentage=cut_pct, cut_diameter=cut_diam,
+                        )
+                        df = df_opt
+                        N_timo = N_opt
+                    elif use_volume_constraint and target_volume > 0 and not use_height_constraint:
+                        N_opt, df_opt, v_opt = solve_timo_for_volume(
+                            target_volume=float(target_volume),
+                            rho=float(rho), g=float(g),
+                            top_pressure=float(top_pressure), phi_max_deg=float(phi_max_deg),
+                            cut_percentage=cut_pct, cut_diameter=cut_diam,
+                        )
+                        df = df_opt
+                        N_timo = N_opt
+
                 if physics_model == "Young–Laplace (de Gennes)":
                     df_full_final = generate_droplet_shape(gamma_s, rho, g, cut_percentage=0)
                 else:
-                    df_full_final = df_full.copy()
+                    # Recompute full (uncut) Timo profile for final metrics/opening calcs with possibly updated N
+                    try:
+                        df_timo_f, info_timo_f = solver_mod.solve_timoshenko_membrane(
+                            rho=float(rho), g=float(g), N=float(N_timo), top_pressure=float(top_pressure), phi_max_deg=float(phi_max_deg)
+                        )
+                        import numpy as _np
+                        z_arr_f = _np.asarray(df_timo_f['z'], dtype=float)
+                        x_arr_f = _np.asarray(df_timo_f['x'], dtype=float)
+                        H_max_f = float(_np.max(z_arr_f)) if len(z_arr_f) else 0.0
+                        h_arr_f = H_max_f - z_arr_f
+                        df_full_final = pd.DataFrame({'h': h_arr_f, 'x-x_0': x_arr_f})
+                        try:
+                            df_full_final['x_shifted'] = -pd.Series(x_arr_f, dtype=float)
+                        except Exception:
+                            pass
+                        # update ook info_timo voor volume
+                        info_timo = info_timo_f
+                    except Exception:
+                        df_full_final = df_full.copy()
                 full_metrics_final = get_droplet_metrics(df_full_final)
                 full_basis_diameter_final = full_metrics_final['bottom_diameter']
                 full_max_diameter_final = full_metrics_final['max_diameter']
@@ -370,6 +415,10 @@ with col5:
                         metrics['volume'] = float(info_timo.get('volume', metrics.get('volume', 0.0)))
                     except Exception:
                         pass
+                    # update YS (N) in params (geoptimaliseerd of invoer)
+                    if physical_params is None:
+                        physical_params = {}
+                    physical_params.update({'N': float(N_timo), 'rho': float(rho), 'g': float(g), 'top_pressure': float(top_pressure)})
                     # Base diameter blijft wat de metriekfunctie berekent: diameter op laagste h
                 logger.info("Metrics | V=%.3f m^3, H=%.3f m, Dmax=%.3f m", float(metrics.get('volume', 0.0)), float(metrics.get('max_height', 0.0)), float(metrics.get('max_diameter', 0.0)))
                 
@@ -520,8 +569,9 @@ if st.session_state.df is not None:
             st.metric("Opening diameter (m)", f"{st.session_state.metrics.get('top_diameter', 0):.2f}")
         else:
             st.metric("Opening diameter (m)", "-")
-        if st.session_state.metrics.get('volume_afgekapt', 0) > 0:
-            st.metric("Collar tube diameter (m)", f"{st.session_state.metrics.get('collar_tube_diameter', 0):.2f}")
+        tube_d_val = float(st.session_state.metrics.get('collar_tube_diameter', 0) or 0.0)
+        if tube_d_val > 0:
+            st.metric("Collar tube diameter (m)", f"{tube_d_val:.2f}")
         else:
             st.metric("Collar tube diameter (m)", "-")
     
@@ -534,13 +584,29 @@ if st.session_state.df is not None:
     if st.session_state.physical_params and 'N' in st.session_state.physical_params:
         with col3:
             st.metric("N (N/m)", f"{st.session_state.physical_params.get('N', 0):.0f}")
-            st.metric("head d (m)", f"{st.session_state.physical_params.get('head_d', 0.0):.3f}")
     else:
         with col3:
             st.metric("γₛ (N/m)", f"{st.session_state.physical_params.get('gamma_s', 0):.0f}")
     with col4:
         if st.session_state.metrics.get('volume_afgekapt', 0) > 0:
             st.metric("Cut volume (m³)", f"{st.session_state.metrics.get('volume_afgekapt', 0):.2f}")
+
+    # Extra: Skin oppervlaktes (mantel + bodem, geen top)
+    st.markdown("")
+    st.subheader("🧵 Skin surfaces")
+    cs1, cs2 = st.columns(2)
+    try:
+        reservoir_area = float(calculate_reservoir_surface_area(st.session_state.df, include_bottom_disc=True))
+    except Exception:
+        reservoir_area = 0.0
+    try:
+        torus_area = float(calculate_torus_surface_area(st.session_state.metrics)) if st.session_state.metrics.get('collar_tube_diameter', 0) else 0.0
+    except Exception:
+        torus_area = 0.0
+    with cs1:
+        st.metric("Reservoir skin (m²)", f"{reservoir_area:.2f}")
+    with cs2:
+        st.metric("Torus skin (m²)", f"{torus_area:.2f}")
     
     st.markdown("---")
     st.header("📈 Visualisation")

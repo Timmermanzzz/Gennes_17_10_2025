@@ -12,7 +12,10 @@ from utils import (
     get_droplet_metrics,
     find_height_for_diameter,
     calculate_diameter_at_height,
-    solve_gamma_for_cut_volume_match
+    solve_gamma_for_cut_volume_match,
+    solve_timo_for_cut_volume_match,
+    calculate_reservoir_surface_area,
+    calculate_torus_surface_area
 )
 from visualisatie import create_2d_plot, create_3d_plot
 from export import export_to_stl, export_to_dxf, export_to_step, export_to_3dm
@@ -61,6 +64,11 @@ st.markdown("---")
 
 st.header("⚙️ Design parameters")
 
+physics_model_m3 = st.selectbox(
+    "Physics model",
+    ["Young–Laplace (de Gennes)", "Timoshenko (membrane)"]
+)
+
 col1, col2 = st.columns(2)
 
 with col1:
@@ -71,7 +79,10 @@ with col1:
         step=0.5,
         help="Desired opening diameter of the reservoir"
     )
-    st.caption("γₛ wordt per oplossing berekend; geen invoer nodig.")
+    if physics_model_m3 == "Young–Laplace (de Gennes)":
+        st.caption("γₛ wordt per oplossing berekend; geen invoer nodig.")
+    else:
+        st.caption("YS (N) wordt per oplossing berekend; geen invoer nodig.")
 
 with col2:
     rho_m3 = st.number_input(
@@ -86,6 +97,26 @@ with col2:
         value=9.81,
         step=0.1
     )
+
+if physics_model_m3 == "Timoshenko (membrane)":
+    col_t1, col_t2 = st.columns(2)
+    with col_t1:
+        top_pressure_m3 = st.number_input(
+            "P₀ - Top pressure (Pa)",
+            min_value=0.0,
+            value=100.0,
+            step=10.0,
+            help="Druk bovenin; bepaalt head d = P₀/(ρg)"
+        )
+    with col_t2:
+        phi_max_deg_m3 = st.slider(
+            "φ max (deg)",
+            min_value=60,
+            max_value=170,
+            value=120,
+            step=5,
+            help="Stopcriterium voor integratie"
+        )
 
 st.markdown("---")
 
@@ -131,46 +162,37 @@ sloshing_m3 = st.number_input(
 if st.button("🔬 Generate Solutions Table", type="primary", use_container_width=True):
     with st.spinner("Computing..."):
         try:
-            # Genereer druppel met een start γₛ (wordt verderop per oplossing herberekend)
-            df_full = generate_droplet_shape(35000.0, rho_m3, g_m3, cut_percentage=0)
-            h_cut = find_height_for_diameter(df_full, cut_diameter_m3)
-            
-            if h_cut is None or np.isnan(h_cut):
-                st.error(f"❌ Cannot find height for diameter {cut_diameter_m3} m")
-                st.stop()
-            
-            # Maak afgekapte versie
-            df_cut_raw = df_full[df_full['h'] <= h_cut].copy()
-            
-            if df_cut_raw.empty:
-                st.error("❌ Cannot create cut shape")
-                st.stop()
-            
-            # Bereken volume ZONDER vlakke top
-            metrics_cut_raw = get_droplet_metrics(df_cut_raw)
-            volume_cut_raw = metrics_cut_raw.get('volume', 0.0)
-            
-            # Voeg vlakke top toe
-            target_radius = cut_diameter_m3 / 2.0
-            n_points = 30
-            x_shifted_vals = np.linspace(-target_radius, 0.0, n_points)
-            top_points_data = []
-            x_max_current = df_cut_raw['x-x_0'].max() if 'x-x_0' in df_cut_raw.columns else 0.0
-            for x_sh in x_shifted_vals:
-                top_points_data.append({
-                    'B': 1.0, 'C': 1.0, 'z': 0,
-                    'x-x_0': x_sh + x_max_current,
-                    'x_shifted': x_sh,
-                    'h': h_cut
-                })
-            top_points = pd.DataFrame(top_points_data)
-            subset_cols = ['x-x_0', 'h'] if 'x-x_0' in df_cut_raw.columns else ['x_shifted', 'h']
-            df_cut = pd.concat([df_cut_raw, top_points], ignore_index=True).drop_duplicates(subset=subset_cols, keep='first').reset_index(drop=True)
-            
-            # Bereken volume_full en cut_volume
-            metrics_full = get_droplet_metrics(df_full)
-            volume_full = metrics_full.get('volume', 0.0)
-            cut_volume = volume_full - volume_cut_raw
+            # Voor Gennes maken we alvast een seed voor h_cut; bij Timo zoekt de solver per rij
+            if physics_model_m3 == "Young–Laplace (de Gennes)":
+                df_full = generate_droplet_shape(35000.0, rho_m3, g_m3, cut_percentage=0)
+                h_cut = find_height_for_diameter(df_full, cut_diameter_m3)
+                if h_cut is None or np.isnan(h_cut):
+                    st.error(f"❌ Cannot find height for diameter {cut_diameter_m3} m")
+                    st.stop()
+                df_cut_raw = df_full[df_full['h'] <= h_cut].copy()
+                if df_cut_raw.empty:
+                    st.error("❌ Cannot create cut shape")
+                    st.stop()
+                metrics_cut_raw = get_droplet_metrics(df_cut_raw)
+                volume_cut_raw = metrics_cut_raw.get('volume', 0.0)
+                target_radius = cut_diameter_m3 / 2.0
+                n_points = 30
+                x_shifted_vals = np.linspace(-target_radius, 0.0, n_points)
+                top_points_data = []
+                x_max_current = df_cut_raw['x-x_0'].max() if 'x-x_0' in df_cut_raw.columns else 0.0
+                for x_sh in x_shifted_vals:
+                    top_points_data.append({
+                        'B': 1.0, 'C': 1.0, 'z': 0,
+                        'x-x_0': x_sh + x_max_current,
+                        'x_shifted': x_sh,
+                        'h': h_cut
+                    })
+                top_points = pd.DataFrame(top_points_data)
+                subset_cols = ['x-x_0', 'h'] if 'x-x_0' in df_cut_raw.columns else ['x_shifted', 'h']
+                df_cut = pd.concat([df_cut_raw, top_points], ignore_index=True).drop_duplicates(subset=subset_cols, keep='first').reset_index(drop=True)
+                metrics_full = get_droplet_metrics(df_full)
+                volume_full = metrics_full.get('volume', 0.0)
+                cut_volume = volume_full - volume_cut_raw
             
             # Sweep over tube diameters
             tube_values = np.arange(tube_diameter_min, tube_diameter_max + 0.5 * tube_diameter_step, tube_diameter_step)
@@ -193,38 +215,68 @@ if st.button("🔬 Generate Solutions Table", type="primary", use_container_widt
                     )
                 V_disp = 2.0 * np.pi * R_major * A_seg
                 collar_vol_phys = max(0.0, A_open * water_height - V_disp)
-                # Find gamma_s such that cut volume equals collar_vol_phys
-                gamma_match, df_cut_gamma, cut_vol_gamma = solve_gamma_for_cut_volume_match(
-                    target_cut_volume=float(collar_vol_phys),
-                    rho=float(rho_m3),
-                    g=float(g_m3),
-                    cut_diameter=float(cut_diameter_m3),
-                    gamma_min=100.0,
-                    gamma_max=1_000_000.0,
-                    max_iter=25,
-                    rel_tol=1e-3,
-                )
-                # Recompute cut height for this gamma and add a flat top (0..R) for consistent visuals
-                try:
-                    h_cut_gamma = float(df_cut_gamma['h'].max()) if df_cut_gamma is not None and not df_cut_gamma.empty else float('nan')
-                except Exception:
-                    h_cut_gamma = float('nan')
-                df_vis = df_cut_gamma
-                try:
-                    if df_cut_gamma is not None and not df_cut_gamma.empty and not np.isnan(h_cut_gamma):
-                        n_points = 30
-                        x_shifted_vals = np.linspace(-R_major, 0.0, n_points)
-                        x_max_current = df_cut_gamma['x-x_0'].max() if 'x-x_0' in df_cut_gamma.columns else 0.0
-                        top_points_gamma = pd.DataFrame({
-                            'B': 1.0, 'C': 1.0, 'z': 0,
-                            'x-x_0': x_shifted_vals + x_max_current,
-                            'x_shifted': x_shifted_vals,
-                            'h': h_cut_gamma
-                        })
-                        subset_cols_gamma = ['x-x_0', 'h'] if 'x-x_0' in df_cut_gamma.columns else ['x_shifted', 'h']
-                        df_vis = pd.concat([df_cut_gamma, top_points_gamma], ignore_index=True).drop_duplicates(subset=subset_cols_gamma, keep='first').reset_index(drop=True)
-                except Exception:
+                if physics_model_m3 == "Young–Laplace (de Gennes)":
+                    gamma_match, df_cut_gamma, cut_vol_gamma = solve_gamma_for_cut_volume_match(
+                        target_cut_volume=float(collar_vol_phys),
+                        rho=float(rho_m3),
+                        g=float(g_m3),
+                        cut_diameter=float(cut_diameter_m3),
+                        gamma_min=100.0,
+                        gamma_max=1_000_000.0,
+                        max_iter=25,
+                        rel_tol=1e-3,
+                    )
+                    try:
+                        h_cut_gamma = float(df_cut_gamma['h'].max()) if df_cut_gamma is not None and not df_cut_gamma.empty else float('nan')
+                    except Exception:
+                        h_cut_gamma = float('nan')
                     df_vis = df_cut_gamma
+                    try:
+                        if df_cut_gamma is not None and not df_cut_gamma.empty and not np.isnan(h_cut_gamma):
+                            n_points = 30
+                            x_shifted_vals = np.linspace(-R_major, 0.0, n_points)
+                            x_max_current = df_cut_gamma['x-x_0'].max() if 'x-x_0' in df_cut_gamma.columns else 0.0
+                            top_points_gamma = pd.DataFrame({
+                                'B': 1.0, 'C': 1.0, 'z': 0,
+                                'x-x_0': x_shifted_vals + x_max_current,
+                                'x_shifted': x_shifted_vals,
+                                'h': h_cut_gamma
+                            })
+                            subset_cols_gamma = ['x-x_0', 'h'] if 'x-x_0' in df_cut_gamma.columns else ['x_shifted', 'h']
+                            df_vis = pd.concat([df_cut_gamma, top_points_gamma], ignore_index=True).drop_duplicates(subset=subset_cols_gamma, keep='first').reset_index(drop=True)
+                    except Exception:
+                        df_vis = df_cut_gamma
+                else:
+                    N_match, df_cut_N, cut_vol_N = solve_timo_for_cut_volume_match(
+                        target_cut_volume=float(collar_vol_phys),
+                        rho=float(rho_m3),
+                        g=float(g_m3),
+                        cut_diameter=float(cut_diameter_m3),
+                        top_pressure=float(top_pressure_m3),
+                        phi_max_deg=float(phi_max_deg_m3),
+                        N_min=5_000.0, N_max=1_000_000.0,
+                        max_iter=25, rel_tol=1e-3
+                    )
+                    try:
+                        h_cut_gamma = float(df_cut_N['h'].max()) if df_cut_N is not None and not df_cut_N.empty else float('nan')
+                    except Exception:
+                        h_cut_gamma = float('nan')
+                    df_vis = df_cut_N
+                    try:
+                        if df_cut_N is not None and not df_cut_N.empty and not np.isnan(h_cut_gamma):
+                            n_points = 30
+                            x_shifted_vals = np.linspace(-R_major, 0.0, n_points)
+                            x_max_current = df_cut_N['x-x_0'].max() if 'x-x_0' in df_cut_N.columns else 0.0
+                            top_points_N = pd.DataFrame({
+                                'B': 1.0, 'C': 1.0, 'z': 0,
+                                'x-x_0': x_shifted_vals + x_max_current,
+                                'x_shifted': x_shifted_vals,
+                                'h': h_cut_gamma
+                            })
+                            subset_cols_N = ['x-x_0', 'h'] if 'x-x_0' in df_cut_N.columns else ['x_shifted', 'h']
+                            df_vis = pd.concat([df_cut_N, top_points_N], ignore_index=True).drop_duplicates(subset=subset_cols_N, keep='first').reset_index(drop=True)
+                    except Exception:
+                        df_vis = df_cut_N
 
                 metrics = get_droplet_metrics(df_vis)
                 droplet_h = float(metrics.get('max_height', 0) or 0.0)
@@ -232,9 +284,10 @@ if st.button("🔬 Generate Solutions Table", type="primary", use_container_widt
                 entry = {
                     'Tube diameter (m)': round(float(tube_diam), 3),
                     'Collar volume (m³)': round(float(collar_vol_phys), 2),
-                    'Cut volume (m³)': round(float(cut_vol_gamma), 2),
-                    'Volume match (%)': round(100.0 * (cut_vol_gamma / max(collar_vol_phys, 1e-9)), 1),
-                    'γₛ match (N/m)': round(float(gamma_match), 1),
+                    'Cut volume (m³)': round(float(cut_vol_gamma if physics_model_m3 == "Young–Laplace (de Gennes)" else cut_vol_N), 2),
+                    'Volume match (%)': round(100.0 * ((cut_vol_gamma if physics_model_m3 == "Young–Laplace (de Gennes)" else cut_vol_N) / max(collar_vol_phys, 1e-9)), 1),
+                    ('γₛ match (N/m)' if physics_model_m3 == "Young–Laplace (de Gennes)" else 'YS match (N/m)'):
+                        round(float(gamma_match if physics_model_m3 == "Young–Laplace (de Gennes)" else N_match), 1),
                     'Reservoir volume (m³)': round(metrics.get('volume', 0), 2),
                     'Total volume (m³)': round(metrics.get('volume', 0) + float(collar_vol_phys), 2),
                     'Droplet height (m)': round(droplet_h, 2),
@@ -249,9 +302,11 @@ if st.button("🔬 Generate Solutions Table", type="primary", use_container_widt
                     'h_seam_eff': float(h_cut_gamma if not np.isnan(h_cut_gamma) else h_cut),
                     'collar_tube_diameter': float(tube_diam),
                     '_df': df_vis,
-                    '_gamma': float(gamma_match),
+                    '_gamma': float(gamma_match) if physics_model_m3 == "Young–Laplace (de Gennes)" else 0.0,
+                    '_N': float(N_match) if physics_model_m3 == "Timoshenko (membrane)" else 0.0,
+                    'model': physics_model_m3,
                     '_h_cut': float(h_cut_gamma if not np.isnan(h_cut_gamma) else h_cut),
-                    'volume_afgekapt': float(cut_vol_gamma),
+                    'volume_afgekapt': float(cut_vol_gamma if physics_model_m3 == "Young–Laplace (de Gennes)" else cut_vol_N),
                     'volume_kraag': float(collar_vol_phys),
                 }
                 # Waterline at seam + (tube height - sloshing)
@@ -274,8 +329,14 @@ if st.session_state.solutions_table_m3 is not None:
     st.header("📋 Solutions")
     
     # Verwijder interne kolommen voor display
+    has_timo = any(sol.get('model') == 'Timoshenko (membrane)' for sol in st.session_state.solutions_table_m3)
+    if has_timo:
+        # Kies label op basis van de eerste rij
+        label_match = 'YS match (N/m)' if st.session_state.solutions_table_m3[0].get('model') == 'Timoshenko (membrane)' else 'γₛ match (N/m)'
+    else:
+        label_match = 'γₛ match (N/m)'
     display_cols = ['Tube diameter (m)', 'Collar volume (m³)', 'Cut volume (m³)', 'Volume match (%)',
-                    'γₛ match (N/m)', 'Reservoir volume (m³)', 'Total volume (m³)', 'Droplet height (m)', 'Total height (m)', 'Base diameter (m)', 'Max diameter (m)']
+                    label_match, 'Reservoir volume (m³)', 'Total volume (m³)', 'Droplet height (m)', 'Total height (m)', 'Base diameter (m)', 'Max diameter (m)']
     
     solutions_display = []
     for sol in st.session_state.solutions_table_m3:
@@ -376,7 +437,27 @@ if st.session_state.df_selected_m3 is not None:
 
     # Material section
     st.subheader("⚙️ Material")
-    st.metric("γₛ match (N/m)", f"{st.session_state.selected_solution_m3['γₛ match (N/m)']:.1f}")
+    if st.session_state.selected_solution_m3.get('model') == 'Timoshenko (membrane)':
+        st.metric("YS match (N/m)", f"{st.session_state.selected_solution_m3.get('YS match (N/m)', 0):.1f}")
+    else:
+        st.metric("γₛ match (N/m)", f"{st.session_state.selected_solution_m3['γₛ match (N/m)']:.1f}")
+    
+    # Skin surfaces
+    st.markdown("")
+    st.subheader("🧵 Skin surfaces")
+    cs1, cs2 = st.columns(2)
+    try:
+        reservoir_area = float(calculate_reservoir_surface_area(st.session_state.df_selected_m3, include_bottom_disc=True))
+    except Exception:
+        reservoir_area = 0.0
+    try:
+        torus_area = float(calculate_torus_surface_area(st.session_state.metrics_selected_m3))
+    except Exception:
+        torus_area = 0.0
+    with cs1:
+        st.metric("Reservoir skin (m²)", f"{reservoir_area:.2f}")
+    with cs2:
+        st.metric("Torus skin (m²)", f"{torus_area:.2f}")
     
     st.markdown("---")
     

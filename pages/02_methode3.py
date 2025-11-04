@@ -485,7 +485,7 @@ if st.session_state.df_selected_m3 is not None:
     
     st.header("💾 Export")
     
-    col_exp1, col_exp2, col_exp3, col_exp4, col_exp5 = st.columns(5)
+    col_exp1, col_exp2, col_exp3, col_exp5 = st.columns(4)
     
     with col_exp1:
         def gen_stl():
@@ -550,28 +550,6 @@ if st.session_state.df_selected_m3 is not None:
                 )
             else:
                 st.error(f"PDF genereren mislukt. Controleer of reportlab is geïnstalleerd. Fout: {err}")
-
-    with col_exp4:
-        def gen_step():
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.step') as tmp:
-                ok = export_to_step(st.session_state.df_selected_m3, tmp.name, metrics=st.session_state.metrics_selected_m3)
-                if ok:
-                    with open(tmp.name, 'rb') as f:
-                        return f.read()
-                return None
-        if st.button("↗️ Download STEP", use_container_width=True):
-            step_data = gen_step()
-            if step_data:
-                tube_val = st.session_state.selected_solution_m3['Tube diameter (m)']
-                st.download_button(
-                    "📥 STEP",
-                    data=step_data,
-                    file_name=f"droplet_tube{tube_val:.2f}m.step",
-                    mime="application/step",
-                    use_container_width=True
-                )
-            else:
-                st.error("STEP export mislukt. Controleer of pythonocc-core is geïnstalleerd.")
 
     with col_exp5:
         def gen_3dm():

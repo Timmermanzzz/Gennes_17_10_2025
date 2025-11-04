@@ -29,14 +29,15 @@ def create_2d_plot(
     """
     # Gebruik altijd een lokale gecentreerde as voor plotten om
     # inconsistenties tussen 'x-x_0' en vooraf berekende 'x_shifted' te vermijden.
-    if 'x-x_0' in df.columns:
-        # Plaats rechterrand (max x) op 0: x_plot = x - x_max
-        x_max = df['x-x_0'].max()
-        x_plot = df['x-x_0'] - x_max
-    elif 'x_shifted' in df.columns:
+    # Geef voorrang aan 'x_shifted' als die al bestaat (as-ware coördinaat)
+    if 'x_shifted' in df.columns:
         # Fallback: verschuif bestaande kolom zodat rechterrand op 0 ligt
         x_max = df['x_shifted'].max()
         x_plot = df['x_shifted'] - x_max
+    elif 'x-x_0' in df.columns:
+        # Plaats rechterrand (max x) op 0: x_plot = x - x_max
+        x_max = df['x-x_0'].max()
+        x_plot = df['x-x_0'] - x_max
     else:
         # Geen bruikbare x-informatie
         fig = go.Figure()
@@ -86,37 +87,26 @@ def create_2d_plot(
         eps = 1e-4
         # Body: strikt onder de afkaphoogte
         df_body = df_valid[df_valid['h'] < (cp_h_try - eps)].copy()
-        # Bepaal de topradius R_top uit metrics of uit punten op de afkaphoogte
-        R_top = 0.0
+        # Bepaal de topradius: gebruik exact gekozen cut (top_diameter)
+        R_open = 0.0
         try:
-            R_top = float(metrics.get('top_diameter', 0.0)) / 2.0 if metrics else 0.0
+            R_open = float(metrics.get('top_diameter', 0.0)) / 2.0 if metrics else 0.0
         except Exception:
-            R_top = 0.0
-        # Fallback: haal radius en rechterrand uit data rond afkaphoogte
-        band = df_valid[(df_valid['h'] >= cp_h_try - eps) & (df_valid['h'] <= cp_h_try + eps)]
-        if not band.empty:
-            try:
-                x_right_edge_band = float(band['x_plot'].max())
-                x_left_edge_band = float(band['x_plot'].min())
-                # Radius = halve afstand (bandbreedte is diameter)
-                R_est = max(0.0, 0.5 * (x_right_edge_band - x_left_edge_band))
-                R_top = max(R_top, R_est)
-            except Exception:
-                pass
-        # Construeer de vlakke top als aparte trace verankerd aan de rechterrand (x=0)
-        if True:
-            # Meet naadstraal zoals in DXF: max |x| in seam-band; fallback naar R_top
-            R_used = R_top
-            try:
-                if not band.empty:
-                    R_used = float(np.max(np.abs(band['x_plot'].to_numpy(dtype=float))))
-            except Exception:
-                pass
-            if R_used <= 0.0:
-                R_used = R_top
-            x_right_edge = 0.0
-            x_top = np.linspace(-R_used, x_right_edge, 80)
-            df_top = pd.DataFrame({'x_plot': x_top, 'h': np.full_like(x_top, cp_h_try)})
+            R_open = 0.0
+        # Fallback: haal radius uit data rond afkaphoogte
+        if R_open <= 0.0:
+            band = df_valid[(df_valid['h'] >= cp_h_try - eps) & (df_valid['h'] <= cp_h_try + eps)]
+            if not band.empty:
+                try:
+                    x_right_edge_band = float(band['x_plot'].max())
+                    x_left_edge_band = float(band['x_plot'].min())
+                    R_open = max(0.0, 0.5 * (x_right_edge_band - x_left_edge_band))
+                except Exception:
+                    pass
+        # Construeer de vlakke top exact op [-R_open, 0]
+        x_right_edge = 0.0
+        x_top = np.linspace(-R_open, x_right_edge, 80)
+        df_top = pd.DataFrame({'x_plot': x_top, 'h': np.full_like(x_top, cp_h_try)})
 
     # Teken body in oplopende hoogte (voorkomt horizontale overshoots)
     df_sorted = df_body.sort_values('h')
@@ -176,46 +166,15 @@ def create_2d_plot(
         R_major = float(metrics.get('torus_R_major', 0.0))
         r_top = float(metrics.get('torus_r_top', 0.0))
         if R_major > 0 and r_top > 0 and seam_h > 0:
-            # Kraag op opening hoogte. Meet de werkelijke naadstraal uit data (C0‑alignment)
-            R_measured = R_major
-            try:
-                eps_h = 1e-4
-                band = df_valid[(df_valid['h'] >= seam_h - eps_h) & (df_valid['h'] <= seam_h + eps_h)]
-                if not band.empty:
-                    x_min = float(band['x_plot'].min())
-                    x_max = float(band['x_plot'].max())
-                    R_measured = max(abs(x_min), abs(x_max))
-                else:
-                    # lineaire interpolatie op r(h) = max |x_plot| per hoogte
-                    dfh = (
-                        df_valid.assign(r_abs=lambda d: d['x_plot'].abs())
-                        .groupby('h')['r_abs'].max().reset_index().sort_values('h')
-                    )
-                    hs = dfh['h'].to_numpy(dtype=float)
-                    rs = dfh['r_abs'].to_numpy(dtype=float)
-                    if seam_h <= hs.min():
-                        R_measured = float(dfh.iloc[0]['r_abs'])
-                    elif seam_h >= hs.max():
-                        R_measured = float(dfh.iloc[-1]['r_abs'])
-                    else:
-                        idx = np.searchsorted(hs, seam_h)
-                        h_lo, h_hi = hs[idx-1], hs[idx]
-                        r_lo = rs[idx-1]
-                        r_hi = rs[idx]
-                        t = (seam_h - h_lo) / (h_hi - h_lo)
-                        r_interp = r_lo + t * (r_hi - r_lo)
-                        R_measured = float(r_interp)
-            except Exception:
-                R_measured = R_major
-            zc_top = seam_h + r_top  # donut net boven de opening
+            # Kraag exact op gekozen opening (geen band-meting)
+            zc_top = seam_h + r_top
             th = np.linspace(0, 2*np.pi, 360)
-            # Links en/of rechts afhankelijk van view; standaard alleen links tonen
             if view in ("full", "half-left"):
-                x_left = -R_measured + r_top * np.cos(th)
+                x_left = -R_major + r_top * np.cos(th)
                 z_left = zc_top + r_top * np.sin(th)
                 fig.add_trace(go.Scatter(x=x_left, y=z_left, mode='lines', name='Collar (left)', line=dict(color='purple', width=1.5)))
             if show_torus_right and view in ("full", "half-right"):
-                x_right = R_measured + r_top * np.cos(th)
+                x_right = R_major + r_top * np.cos(th)
                 z_right = zc_top + r_top * np.sin(th)
                 fig.add_trace(go.Scatter(x=x_right, y=z_right, mode='lines', name='Collar (right)', line=dict(color='purple', width=1.5)))
     except Exception:
@@ -294,12 +253,13 @@ def create_3d_plot(df: pd.DataFrame, metrics: dict | None = None, title: str = "
         Plotly Figure object
     """
     # Hergebruik dezelfde x-constructie als bij 2D: plaats rechterrand (max x) op 0
-    if 'x-x_0' in df.columns:
-        x_max = df['x-x_0'].max()
-        x_plot = df['x-x_0'] - x_max
-    elif 'x_shifted' in df.columns:
+    # Geef voorrang aan 'x_shifted' als die al bestaat (as-ware coördinaat)
+    if 'x_shifted' in df.columns:
         x_max = df['x_shifted'].max()
         x_plot = df['x_shifted'] - x_max
+    elif 'x-x_0' in df.columns:
+        x_max = df['x-x_0'].max()
+        x_plot = df['x-x_0'] - x_max
     else:
         fig = go.Figure()
         fig.add_annotation(

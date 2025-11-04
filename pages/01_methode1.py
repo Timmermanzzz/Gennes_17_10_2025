@@ -412,7 +412,7 @@ with col5:
                 else:
                     # Voor Timoshenko: gebruik volume uit de ODE (π∫x^2 dz) voor precisie
                     try:
-                        metrics['volume'] = float(info_timo.get('volume', metrics.get('volume', 0.0)))
+                        metrics['volume_full_ode'] = float(info_timo.get('volume', 0.0))
                     except Exception:
                         pass
                     # update YS (N) in params (geoptimaliseerd of invoer)
@@ -451,14 +451,22 @@ with col5:
                 
                 # VOLLEDIG NIEUWE LOGICA: Puur volume-gebaseerd, GEEN druk
                 if opening_diam_for_torus is not None and opening_diam_for_torus > 0:
-                    # Stap 1: Bereken volume_afgekapt
+                    # Stap 1: Bereken volume_afgekapt op basis van de FINALE vorm (raw truncation, zonder vlakke top)
                     volume_full = full_metrics_final.get('volume', 0.0)
-                    if df_before_top is not None:
-                        metrics_before_top = get_droplet_metrics(df_before_top)
-                        volume_cut = metrics_before_top.get('volume', 0.0)
-                    else:
-                        volume_cut = metrics.get('volume', 0.0)
-                    volume_afgekapt = volume_full - volume_cut
+                    volume_cut = 0.0
+                    try:
+                        if cut_h_final is not None and not np.isnan(cut_h_final):
+                            df_trunc_raw_final = df_full_final[df_full_final['h'] <= float(cut_h_final)].copy()
+                            metrics_trunc_final = get_droplet_metrics(df_trunc_raw_final)
+                            volume_cut = float(metrics_trunc_final.get('volume', 0.0))
+                        elif df_before_top is not None:
+                            metrics_before_top = get_droplet_metrics(df_before_top)
+                            volume_cut = float(metrics_before_top.get('volume', 0.0))
+                        else:
+                            volume_cut = float(metrics.get('volume', 0.0))
+                    except Exception:
+                        volume_cut = float(metrics.get('volume', 0.0))
+                    volume_afgekapt = float(volume_full) - float(volume_cut)
                     
                     # Stap 2: Auto-bereken tube diameter zodat volume_kraag = volume_afgekapt
                     from utils import find_collar_tube_diameter_with_displacement

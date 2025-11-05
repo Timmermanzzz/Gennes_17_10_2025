@@ -1,4 +1,5 @@
 import math
+import sys
 import numpy as np
 import pandas as pd
 
@@ -107,8 +108,8 @@ def integrate_volume(r: np.ndarray, h: np.ndarray) -> float:
 
 
 def main() -> None:
-    # Adjust path if needed
-    csv_path = r"C:\Users\rens_\Documents\timo.csv"
+    # CSV pad: eerste CLI-argument, of fallback naar vorige default
+    csv_path = sys.argv[1] if len(sys.argv) > 1 else r"C:\Users\rens_\Documents\timo.csv"
 
     # 1) Read Excel profile
     r_excel, h_excel = read_excel_profile(csv_path)
@@ -135,8 +136,9 @@ def main() -> None:
 
     denom = max(V_excel, V_app)
     perc = (100.0 * dV_tot / denom) if denom > 1e-9 else float('nan')
-    print(f"V_excel={V_excel:.2f} m^3  V_app={V_app:.2f} m^3  ΔV={dV_tot:.2f} m^3 ({perc:.1f}%)")
-    print(f"Max ΔV_cum at h≈{h[idx_max]:.3f} m  ΔV_cum≈{dV_cum[idx_max]:.2f} m^3")
+    # ASCII-only prints for Windows consoles
+    print(f"V_excel={V_excel:.2f} m^3  V_app={V_app:.2f} m^3  dV={dV_tot:.2f} m^3 ({perc:.1f}%)")
+    print(f"Max dV_cum at h~{h[idx_max]:.3f} m  dV_cum~{dV_cum[idx_max]:.2f} m^3")
 
     for a, b, name in [(0.0, 0.3 * h_max, "top"), (0.3 * h_max, 0.8 * h_max, "mid"), (0.8 * h_max, h_max, "foot")]:
         sel = (h >= a) & (h < b)
@@ -144,12 +146,12 @@ def main() -> None:
             dV_seg = float(math.pi * np.trapz((rE[sel] * rE[sel] - rA[sel] * rA[sel]), h[sel]))
         else:
             dV_seg = 0.0
-        print(f"{name:>4}: ΔV≈{dV_seg:.2f} m^3")
+        print(f"{name:>4}: dV~{dV_seg:.2f} m^3")
 
     # Local radius difference at the worst height
     rE_loc = float(np.interp(h[idx_max], h_excel, r_excel))
     rA_loc = float(np.interp(h[idx_max], h_app,   r_app))
-    print(f"At h≈{h[idx_max]:.3f} m: r_excel={rE_loc:.3f} m, r_app={rA_loc:.3f} m")
+    print(f"At h~{h[idx_max]:.3f} m: r_excel={rE_loc:.3f} m, r_app={rA_loc:.3f} m")
     # Quick stats to diagnose if volumes are zero
     print(f"Excel points: {len(h_excel)}  h[min,max]=({h_excel.min():.3f},{h_excel.max():.3f})  r[max]={r_excel.max():.3f}")
     print(f" App  points: {len(h_app)}    h[min,max]=({h_app.min():.3f},{h_app.max():.3f})  r[max]={r_app.max():.3f}")

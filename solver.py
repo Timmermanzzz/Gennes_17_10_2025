@@ -351,9 +351,9 @@ def solve_timoshenko_membrane(
     top_pressure: float = None,
     head_d: float = None,
     phi_max_deg: float = 120.0,
-    dx_initial: float = 0.01,
-    dz_initial: float = 0.01,
-    max_steps: int = 20000,
+    dx_initial: float = 0.003,
+    dz_initial: float = 0.004,
+    max_steps: int = 2000000,
     adaptive: bool = True,
 ) -> Tuple[pd.DataFrame, Dict]:
     """
@@ -410,7 +410,7 @@ def solve_timoshenko_membrane(
     z = (x * x) / (2.0 * r1_apex)
 
     phi_max = math.radians(float(phi_max_deg))
-    u_switch = 1.0 - 1e-3  # schakel over rond 89.94°
+    u_switch = 1.0 - 1e-6  # nog dichter bij verticaal switchen
 
     # Opslag
     xs: list = [0.0, x]
@@ -444,8 +444,8 @@ def solve_timoshenko_membrane(
 
         # Eenvoudige adaptieve stap: verklein indien dicht bij u -> 1
         if adaptive:
-            safety = max(1e-3, 1.0 - abs(u_clamped))
-            dx = min(dx_initial, 0.1 * safety)
+            safety = max(1e-4, 1.0 - abs(u_clamped))
+            dx = min(dx_initial, 0.05 * safety)
 
         # Schakel naar fase 2 zodra we heel dicht bij verticaal zijn
         if abs(u_clamped) >= u_switch:
@@ -483,8 +483,8 @@ def solve_timoshenko_membrane(
     steps_z = 0
     if stopped_reason == "switch_to_z" and steps < int(max_steps):
         # Startwaarden iets weg van u=1
-        u = max(min(us[-1], 1.0 - 1e-6), 1e-4)
-        x = max(xs[-1], 1e-9)
+        u = max(min(us[-1], 1.0 - 1e-8), 1e-6)
+        x = max(xs[-1], 1e-12)
         z = zs[-1]
 
         def rhs_z(z_loc: float, x_loc: float, u_loc: float) -> Tuple[float, float]:
@@ -505,13 +505,13 @@ def solve_timoshenko_membrane(
                 break
 
             # Stop als we de as bereiken
-            if x <= 1e-6:
+            if x <= 1e-10:
                 stopped_reason = "x_to_0"
                 break
 
             # adaptieve stap: maak kleiner als u klein wordt (dx/dz groot)
             if adaptive:
-                dz = min(dz_initial, 0.05 * max(u, 1e-3))
+                dz = min(dz_initial, 0.01 * max(u, 1e-6))
 
             # RK4 over z
             k1x, k1u = rhs_z(z, x, u)
@@ -526,10 +526,42 @@ def solve_timoshenko_membrane(
             if not (math.isfinite(x_next) and math.isfinite(u_next)):
                 stopped_reason = "non_finite"
                 break
-            if x_next < 0:
+            # Event detection: u -> 0 binnen deze stap (lineaire interpolatie in u)
+            u_tol = 1e-10
+            if (u > u_tol and u_next <= u_tol):
+                denom = (u - u_next)
+                t_ev = 0.0 if denom == 0.0 else max(0.0, min(1.0, float(u / denom)))
+                x_ev = x + t_ev * (x_next - x)
+                z_ev = z + t_ev * (z_next - z)
+                x = max(0.0, x_ev)
+                z = z_ev
+                u = 0.0
+                xs.append(x)
+                zs.append(z)
+                us.append(u)
+                steps_z += 1
+                stopped_reason = "completed_full"
+                break
+
+            if x_next <= 0.0:
+                # Lineaire interpolatie naar x=0 om z_bottom accurater te schatten
+                dx_step = x_next - x
+                if dx_step != 0.0:
+                    t = float(x / (-dx_step))  # in (0,1]
+                    t = max(0.0, min(1.0, t))
+                    z_zero = z + t * dz
+                    x = 0.0
+                    z = z_zero
+                    u = 0.0
+                    xs.append(x)
+                    zs.append(z)
+                    us.append(u)
+                    steps_z += 1
+                    stopped_reason = "completed_full"
+                    break
                 stopped_reason = "x_to_0"
                 break
-            if u_next <= 1e-9 or x_next <= 1e-6:
+            if u_next <= 1e-14 or x_next <= 1e-10:
                 # We hebben de onder-apex (phi -> 0) bereikt
                 u_next = 0.0
                 x = x_next
@@ -537,6 +569,55 @@ def solve_timoshenko_membrane(
                 xs.append(x)
                 zs.append(z)
                 us.append(u_next)
+                steps_z += 1
+                stopped_reason = "completed_full"
+                break
+
+            x, z, u = x_next, z_next, u_next
+            xs.append(x)
+            zs.append(z)
+            us.append(u)
+            steps_z += 1
+
+    # FASE 3 (optioneel): wanneer u klein is maar x nog niet 0 is, integreer verder met x als onafhankelijke variabele
+    if (steps + steps_z) < int(max_steps) and xs and us and zs and xs[-1] > 0.0 and 0.0 < us[-1] < 0.2:
+        x = float(xs[-1])
+        z = float(zs[-1])
+        u = float(us[-1])
+        dx3 = - float(max(dx_initial * 0.5, 1e-4))  # kleine negatieve stap
+        while (steps + steps_z) < int(max_steps):
+            # adaptieve verkleining naarmate u afneemt
+            if adaptive:
+                dx3 = - min(abs(dx3), max(1e-5, 0.02 * max(u, 1e-6)))
+
+            # RK4 in x (negatieve richting)
+            k1u, k1z = rhs(x, z, u)
+            k2u, k2z = rhs(x + 0.5 * dx3, z + 0.5 * dx3 * k1z, u + 0.5 * dx3 * k1u)
+            k3u, k3z = rhs(x + 0.5 * dx3, z + 0.5 * dx3 * k2z, u + 0.5 * dx3 * k2u)
+            k4u, k4z = rhs(x + dx3,       z + dx3 * k3z,       u + dx3 * k3u)
+
+            u_next = u + (dx3 / 6.0) * (k1u + 2.0 * k2u + 2.0 * k3u + k4u)
+            z_next = z + (dx3 / 6.0) * (k1z + 2.0 * k2z + 2.0 * k3z + k4z)
+            x_next = x + dx3
+
+            if not (math.isfinite(u_next) and math.isfinite(z_next)):
+                stopped_reason = "non_finite"
+                break
+
+            if x_next <= 0.0 or u_next <= 0.0:
+                # Interpoleer naar x=0 of u=0
+                t_num = 1.0
+                if x_next <= 0.0 and x != x_next:
+                    t_num = min(t_num, float(x / (x - x_next)))
+                if u_next <= 0.0 and u != u_next:
+                    t_num = min(t_num, float(u / (u - u_next)))
+                t_num = max(0.0, min(1.0, t_num))
+                x = x + t_num * (x_next - x)
+                z = z + t_num * (z_next - z)
+                u = 0.0
+                xs.append(x)
+                zs.append(z)
+                us.append(u)
                 steps_z += 1
                 stopped_reason = "completed_full"
                 break

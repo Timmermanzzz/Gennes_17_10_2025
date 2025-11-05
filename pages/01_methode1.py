@@ -135,7 +135,7 @@ if physics_model == "Timoshenko (membrane)":
         top_pressure = st.number_input(
             "P₀ - Top pressure (Pa)",
             min_value=0.0,
-            max_value=100000.0,
+            max_value=2000.0,
             value=100.0,
             step=10.0,
             help="Druk bovenin; bepaalt head d = P₀/(ρg)"

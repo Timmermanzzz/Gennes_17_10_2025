@@ -685,3 +685,335 @@ def solve_timoshenko_membrane(
     }
 
     return df, info
+
+
+def solve_open_rim_membrane(
+    D_open: float,
+    N: float,
+    rho: float,
+    g: float,
+    h0: float = 0.0,
+    h_cap: float = 0.0,
+    phi_top_deg: float = 2.0,
+    dx_initial: float = 0.003,
+    dz_initial: float = 0.004,
+    phi_max_deg: float = 179.0,
+    z_seed: float = 0.02,
+    max_steps: int = 2000000,
+    adaptive: bool = True,
+    debug: bool = False,
+    debug_max: int = 300,
+) -> Tuple[pd.DataFrame, Dict]:
+    """
+    Open-rim (always-open) solver with two phases:
+      1) x-phase near the rim (u small): integrate du/dx + u/x = (γ z)/N, dz/dx = u/√(1-u²)
+      2) z-phase past near-vertical:     integrate dx/dz = -√(1-u²)/u,  du/dz = [(γ z)/N - u/x] √(1-u²)/u
+
+    Start at rim (z=0, x=R_open, u=sin(φ_top)). This avoids the u→0 singularity and yields
+    realistic depth for small φ_top.
+    """
+    gamma = float(rho) * float(g)
+    h0 = max(0.0, float(h0))
+    p0 = gamma * h0  # uniform overpressure from collar depth
+    h_cap = max(0.0, float(h_cap))
+
+    # Helper: pressure over N as function of local depth
+    def p_over_N(z_loc: float) -> float:
+        if h_cap > 0.0:
+            # constant cap zone to depth h_cap, then hydrostatic beyond
+            if z_loc <= h_cap:
+                p_eff = p0
+            else:
+                p_eff = p0 + gamma * (z_loc - h_cap)
+        else:
+            p_eff = p0 + gamma * z_loc
+        return p_eff / float(N)
+
+    if D_open <= 0:
+        raise ValueError("D_open must be > 0")
+    if N <= 0:
+        raise ValueError("N must be > 0")
+    if rho <= 0 or g <= 0:
+        raise ValueError("rho and g must be > 0")
+
+    R_open = float(D_open) / 2.0
+    phi0 = math.radians(max(1e-3, float(phi_top_deg)))
+    u0 = max(1e-9, math.sin(phi0))
+
+    # Initial state at rim
+    x = float(R_open)
+    # Small seed depth to kick hydrostatic term (numerical regularisation)
+    z = max(0.0, float(z_seed))
+    u = float(u0)
+
+    xs: list = [x]
+    zs: list = [z]
+    us: list = [u]
+
+    # Switch to z-phase only when we are almost vertical
+    u_switch = 0.985
+    phi_max = math.radians(float(phi_max_deg))
+
+    # ---- Phase 1: x as independent variable (move inward: dx < 0) ----
+    def rhs_x(x_loc: float, z_loc: float, u_loc: float) -> Tuple[float, float]:
+        u_c = max(min(u_loc, 1.0 - 1e-9), 1e-9)
+        inv_x = 0.0 if x_loc <= 0.0 else (1.0 / x_loc)
+        dudx = p_over_N(z_loc) - u_c * inv_x
+        # Gebruik dz/dx < 0 zodat met dx<0 de diepte toeneemt: Δz = dzdx*dx > 0
+        dzdx = - u_c / math.sqrt(max(1.0 - u_c * u_c, 1e-16))
+        return dudx, dzdx
+
+    dx = -float(max(dx_initial, 1e-5))
+    # Adaptive control to ensure sufficient depth growth in x-phase
+    dz_target_x_base = 0.02   # baseline ~2 cm per x-step
+    dx_min_abs = 1e-4
+    dx_max_abs = 0.5
+
+    debug_rows: list = []
+    steps = 0
+    stopped_reason = "switch_to_z"
+    u_switch_value = float('nan')
+
+    while steps < int(max_steps):
+        u_c = max(min(u, 1.0 - 1e-9), 1e-9)
+        if math.asin(u_c) >= phi_max:
+            break
+        if adaptive:
+            # Aggressive depth growth until we are nearly vertical
+            if u_c < 0.7:
+                dz_target_x = dz_target_x_base * 3.0
+            elif u_c < 0.95:
+                dz_target_x = dz_target_x_base * 1.5
+            else:
+                dz_target_x = dz_target_x_base
+
+            # choose dx so that |Δz| ≈ dz_target_x; Δz ≈ |dzdx| * |dx|
+            dzdx_mag = u_c / math.sqrt(max(1.0 - u_c * u_c, 1e-16))
+            dx_abs = dz_target_x / dzdx_mag if dzdx_mag > 0.0 else abs(dx_initial)
+            # prevent overstepping radius shrink near small x
+            dx_abs = min(dx_abs, 0.2 * max(x, 1e-6))
+            dx_abs = max(dx_min_abs, min(dx_max_abs, dx_abs))
+            dx = -dx_abs
+
+        # RK4 in x met negatieve dx (naar binnen)
+        k1u, k1z = rhs_x(x, z, u)
+        k2u, k2z = rhs_x(x + 0.5 * dx, z + 0.5 * dx * k1z, u + 0.5 * dx * k1u)
+        k3u, k3z = rhs_x(x + 0.5 * dx, z + 0.5 * dx * k2z, u + 0.5 * dx * k2u)
+        k4u, k4z = rhs_x(x + dx,       z + dx * k3z,       u + dx * k3u)
+
+        # u groeit bij dx<0 en dudx>0 via minusteken
+        u_next = u - (dx / 6.0) * (k1u + 2.0 * k2u + 2.0 * k3u + k4u)
+        z_next = z + (dx / 6.0) * (k1z + 2.0 * k2z + 2.0 * k3z + k4z)
+        x_next = x + dx
+        # backoff if we overshoot the axis within this step
+        if x_next < 0.0:
+            # reduce step to hit x=0 boundary more carefully
+            frac = max(0.1, min(0.9, float(x / (x - x_next))))
+            dx *= frac
+            k1u, k1z = rhs_x(x, z, u)
+            k2u, k2z = rhs_x(x + 0.5 * dx, z + 0.5 * dx * k1z, u + 0.5 * dx * k1u)
+            k3u, k3z = rhs_x(x + 0.5 * dx, z + 0.5 * dx * k2z, u + 0.5 * dx * k2u)
+            k4u, k4z = rhs_x(x + dx,       z + dx * k3z,       u + dx * k3u)
+            u_next = u - (dx / 6.0) * (k1u + 2.0 * k2u + 2.0 * k3u + k4u)
+            z_next = z + (dx / 6.0) * (k1z + 2.0 * k2z + 2.0 * k3z + k4z)
+            x_next = x + dx
+
+        if not (math.isfinite(u_next) and math.isfinite(z_next)):
+            stopped_reason = "non_finite"
+            break
+        # debug capture
+        if debug and len(debug_rows) < int(debug_max):
+            inv_x = 0.0 if x <= 0.0 else (1.0 / x)
+            dudx_now = (gamma * z) / float(N) - max(min(u, 1.0 - 1e-9), 1e-9) * inv_x
+            dzdx_now = - max(min(u, 1.0 - 1e-9), 1e-9) / math.sqrt(max(1.0 - u * u, 1e-16))
+            debug_rows.append({
+                'phase': 'x', 'step': steps, 'x': float(x), 'z': float(z), 'u': float(u),
+                'dudx': float(dudx_now), 'dzdx': float(dzdx_now), 'dx': float(dx),
+                'x_next': float(x_next), 'z_next': float(z_next), 'u_next': float(u_next),
+            })
+
+        # switch condition: only when almost vertical (u close to 1)
+        if abs(u_next) >= u_switch:
+            # ready for z-phase
+            x, z, u = x_next, max(z_next, 0.0), max(min(u_next, 1.0 - 1e-8), 1e-8)
+            xs.append(x); zs.append(z); us.append(u)
+            u_switch_value = float(u_next)
+            break
+        if x_next <= 1e-12:
+            # hit the axis already
+            x, z, u = 0.0, max(z_next, 0.0), 0.0
+            xs.append(x); zs.append(z); us.append(u)
+            stopped_reason = "x_to_0_in_x_phase"
+            phi_max = 0.0
+            u_switch_value = float(us[-2] if len(us) >= 2 else u_next)
+            break
+
+        x, z, u = x_next, max(z_next, 0.0), max(min(u_next, 1.0 - 1e-9), 1e-9)
+        xs.append(x); zs.append(z); us.append(u)
+        steps += 1
+
+    # ---- Phase 2: z as independent variable until axis ----
+    steps_z = 0
+    if xs[-1] > 0.0 and us[-1] > 0.0 and steps < int(max_steps):
+        def rhs_z(z_loc: float, x_loc: float, u_loc: float) -> Tuple[float, float]:
+            u_c = max(min(u_loc, 1.0 - 1e-9), 1e-9)
+            s = math.sqrt(max(1.0 - u_c * u_c, 1e-16))
+            dxdz = - s / u_c
+            term = (p_over_N(z_loc) - (u_c / max(x_loc, 1e-12)))
+            # Consistent with chain rule: du/dz = (du/dx) * (dx/dz) = term * dxdz
+            dudz = term * dxdz
+            return dxdz, dudz
+
+        dz = float(max(dz_initial, 1e-5))
+        while (steps + steps_z) < int(max_steps):
+            if adaptive:
+                dz = min(dz_initial, 0.01 * max(us[-1], 1e-6))
+
+            x0, z0, u0_ = xs[-1], zs[-1], us[-1]
+            k1x, k1u = rhs_z(z0, x0, u0_)
+            k2x, k2u = rhs_z(z0 + 0.5 * dz, x0 + 0.5 * dz * k1x, u0_ + 0.5 * dz * k1u)
+            k3x, k3u = rhs_z(z0 + 0.5 * dz, x0 + 0.5 * dz * k2x, u0_ + 0.5 * dz * k2u)
+            k4x, k4u = rhs_z(z0 + dz,       x0 + dz * k3x,       u0_ + dz * k3u)
+
+            x_next = x0 + (dz / 6.0) * (k1x + 2.0 * k2x + 2.0 * k3x + k4x)
+            u_next = u0_ + (dz / 6.0) * (k1u + 2.0 * k2u + 2.0 * k3u + k4u)
+            z_next = z0 + dz
+
+            if not (math.isfinite(x_next) and math.isfinite(u_next)):
+                stopped_reason = "non_finite"
+                break
+
+            if x_next <= 0.0:
+                # interpolate to axis
+                dx_step = x_next - x0
+                t = 1.0 if dx_step == 0.0 else max(0.0, min(1.0, float(x0 / (x0 - x_next))))
+                z_axis = z0 + t * dz
+                xs.append(0.0); zs.append(z_axis); us.append(0.0)
+                stopped_reason = "x_to_0"
+                break
+
+            xs.append(x_next)
+            zs.append(z_next)
+            us.append(max(min(u_next, 1.0 - 1e-9), 1e-9))
+            steps_z += 1
+
+    H_total = float(zs[-1]) if zs else 0.0
+
+    # Volume V = π ∫ x^2 dz
+    if len(zs) >= 2:
+        z_arr = np.asarray(zs, dtype=float)
+        x2 = (np.asarray(xs, dtype=float) ** 2)
+        dz_arr = np.diff(z_arr)
+        x2_bar = 0.5 * (x2[:-1] + x2[1:])
+        volume = float(math.pi * np.sum(x2_bar * dz_arr))
+    else:
+        volume = 0.0
+
+    # Convert to app convention
+    df_solver = pd.DataFrame({'z': np.asarray(zs, dtype=float), 'x': np.asarray(xs, dtype=float), 'u': np.asarray(us, dtype=float)})
+    try:
+        df_solver['phi'] = df_solver['u'].apply(lambda uu: math.asin(max(min(uu, 1.0), -1.0)))
+    except Exception:
+        df_solver['phi'] = 0.0
+
+    h = H_total - df_solver['z'].to_numpy(dtype=float)
+    x_rad = df_solver['x'].to_numpy(dtype=float)
+    df = pd.DataFrame({'h': h, 'x-x_0': x_rad})
+    try:
+        df['x_shifted'] = -pd.Series(x_rad, dtype=float)
+    except Exception:
+        pass
+
+    info = {
+        'H_total': float(H_total),
+        'volume': float(volume),
+        'R_open': float(R_open),
+        'D_open': float(D_open),
+        'h0': float(h0),
+        'p0': float(p0),
+        'h_cap': float(h_cap),
+        'N': float(N),
+        'rho': float(rho),
+        'g': float(g),
+        'phi_top_deg': float(phi_top_deg),
+        'steps_x': int(steps),
+        'steps_z': int(steps_z),
+        'stopped_reason': str(stopped_reason),
+        'u_switch': float(u_switch_value),
+    }
+
+    if debug:
+        info['debug_rows'] = debug_rows
+
+    return df, info
+
+def shoot_open_rim_membrane(
+    D_open: float,
+    N: float,
+    rho: float,
+    g: float,
+    h0: float = 0.0,
+    h_cap: float = 0.0,
+    phi_min_deg: float = 1.0,
+    phi_max_deg: float = 30.0,
+    z_seed: float = 0.0,
+    target_u: float = 0.985,
+    max_iter: int = 12,
+) -> Tuple[pd.DataFrame, Dict]:
+    """
+    Shooting wrapper: find φ_top so that the x-phase reaches near-vertical (u≈target_u)
+    before switching to z-phase, then integrate to the axis.
+    Returns (df, info) from the best φ_top.
+    """
+    def eval_phi(phi_deg: float):
+        # Use debug=False for performance; store u_switch in info
+        df, info = solve_open_rim_membrane(
+            D_open=D_open, N=N, rho=rho, g=g,
+            h0=float(h0),
+            h_cap=float(h_cap),
+            phi_top_deg=float(phi_deg), z_seed=float(z_seed),
+            debug=False,
+        )
+        u_sw = float(info.get('u_switch', 0.0))
+        reason = str(info.get('stopped_reason', ''))
+        H = float(info.get('H_total', 0.0))
+        # Cost prefers u_switch close to target and penalizes early axis
+        penalty = 0.0
+        if 'x_to_0_in_x_phase' in reason or H <= 0.0:
+            penalty += 10.0
+        cost = abs(u_sw - target_u) + penalty
+        return cost, df, info
+
+    # Coarse scan
+    grid = np.linspace(float(phi_min_deg), float(phi_max_deg), num=8)
+    best = None
+    for phi in grid:
+        c, df, info = eval_phi(phi)
+        if best is None or c < best[0]:
+            best = (c, phi, df, info)
+
+    # Local refine around best
+    lo = max(phi_min_deg, best[1] - 5.0)
+    hi = min(phi_max_deg, best[1] + 5.0)
+    for _ in range(max(3, int(max_iter))):
+        phis = np.linspace(lo, hi, num=5)
+        for phi in phis:
+            c, df, info = eval_phi(phi)
+            if c < best[0]:
+                best = (c, phi, df, info)
+        span = hi - lo
+        lo = max(phi_min_deg, best[1] - 0.3 * span)
+        hi = min(phi_max_deg, best[1] + 0.3 * span)
+
+    # Attach chosen phi to info
+    best_info = best[3]
+    best_info['phi_top_deg_chosen'] = float(best[1])
+    best_info['shoot_cost'] = float(best[0])
+    best_info['h0'] = float(h0)
+    best_info['h_cap'] = float(h_cap)
+    try:
+        gamma = float(rho) * float(g)
+        best_info['p0'] = float(gamma * float(h0))
+    except Exception:
+        pass
+    return best[2], best_info

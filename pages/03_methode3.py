@@ -584,6 +584,5 @@ if st.session_state.df_selected_m3 is not None:
                 )
             else:
                 st.error(f"3DM export mislukt. {err or 'Controleer of rhino3dm is geïnstalleerd.'}")
-
 else:
     st.info("👆 Generate solutions and select one to visualise and export.")

@@ -83,7 +83,8 @@ st.header("⚙️ Parameters")
 # Physics model selector
 physics_model = st.selectbox(
     "Physics model",
-    ["Young–Laplace (de Gennes)", "Timoshenko (membrane)"]
+    ["Young–Laplace (de Gennes)", "Timoshenko (membrane)"],
+    index=1
 )
 
 # Row 1: Physical properties
@@ -516,6 +517,108 @@ with col5:
                     except Exception:
                         metrics['h_waterline'] = float(metrics.get('h_seam_eff', 0.0))
                 
+                # Extra diagnostiek (Timoshenko): krachten en phi op de naad
+                try:
+                    if physics_model == "Timoshenko (membrane)":
+                        seam_h = float(metrics.get('h_seam_eff', 0.0))
+                        if seam_h > 0:
+                            N_val = float(N_timo)
+                            rho_val = float(rho)
+                            g_val = float(g)
+                            head_d_val = float(info_timo.get('head_d', 0.0))
+
+                            # h = H_total - z  ⇒  z = H_total - h
+                            H_total_f = float(df_full_final['h'].max()) if not df_full_final.empty else 0.0
+                            z_seam = max(0.0, H_total_f - seam_h)
+
+                            # Interpoleer phi, r1, r2 uit de ruwe Timoshenko-output (df_timo_f)
+                            phi_seam = None
+                            H_mean = None
+                            try:
+                                import numpy as _np
+                                z_arr_f = _np.asarray(df_timo_f['z'], dtype=float)
+                                order = _np.argsort(z_arr_f)
+                                z_sorted = z_arr_f[order]
+                                phi_sorted = _np.asarray(df_timo_f.get('phi', _np.zeros_like(z_arr_f)), dtype=float)[order]
+                                r1_sorted = _np.asarray(df_timo_f.get('r1', _np.full_like(z_arr_f, _np.inf)), dtype=float)[order]
+                                r2_sorted = _np.asarray(df_timo_f.get('r2', _np.full_like(z_arr_f, _np.inf)), dtype=float)[order]
+                                zq = min(max(z_seam, float(z_sorted.min())), float(z_sorted.max()))
+                                import numpy as __np
+                                phi_seam = float(__np.interp(zq, z_sorted, phi_sorted))
+                                r1_s = float(__np.interp(zq, z_sorted, r1_sorted))
+                                r2_s = float(__np.interp(zq, z_sorted, r2_sorted))
+                                inv_r1 = 0.0 if (not __np.isfinite(r1_s) or abs(r1_s) < 1e-12) else (1.0 / r1_s)
+                                inv_r2 = 0.0 if (not __np.isfinite(r2_s) or abs(r2_s) < 1e-12) else (1.0 / r2_s)
+                                H_mean = 0.5 * (inv_r1 + inv_r2)
+                            except Exception:
+                                pass
+
+                            # Druk en topview lijnlast
+                            p_seam = float(rho_val * g_val * (head_d_val + z_seam))
+                            try:
+                                R_open = float(metrics.get('top_diameter', 0.0)) * 0.5
+                            except Exception:
+                                R_open = 0.0
+                            radial_line_load = float(N_val / R_open) if R_open > 0 else 0.0
+
+                            # Evenwichtsresidu 2 N H − ρ g (d + z)
+                            equilibrium_residual = None
+                            if H_mean is not None:
+                                equilibrium_residual = float(2.0 * N_val * H_mean - (rho_val * g_val * (head_d_val + z_seam)))
+
+                            # Bewaar in metrics
+                            if phi_seam is not None:
+                                import math as _math
+                                metrics['phi_seam_deg'] = float(_math.degrees(phi_seam))
+                                # Componenten van meridionale N en normale druk p in (horizontaal, verticaal)
+                                cos_phi = float(_math.cos(phi_seam))
+                                sin_phi = float(_math.sin(phi_seam))
+                                # Meridionale membraanspanning (vector langs raaklijn): componenten in globale assen
+                                N_h = float(N_val * cos_phi)   # horizontaal (radiaal)
+                                N_v = float(N_val * sin_phi)   # verticaal
+                                metrics['meridional_N_horizontal_N_per_m'] = N_h
+                                metrics['meridional_N_vertical_N_per_m'] = N_v
+                                # Verhouding (vert/horiz) = tan(phi)
+                                metrics['ratio_N_vert_over_horiz'] = float(_math.tan(phi_seam)) if abs(cos_phi) > 1e-12 else float('inf')
+                                # Normale druk p werkt langs n = (-sinφ, cosφ); componenten in globale assen
+                                p_h = float(p_seam * sin_phi)
+                                p_v = float(p_seam * cos_phi)
+                                metrics['pressure_horizontal_Pa'] = p_h
+                                metrics['pressure_vertical_Pa'] = p_v
+                                metrics['ratio_p_vert_over_horiz'] = float((p_v / p_h)) if abs(p_h) > 1e-12 else float('inf')
+                            metrics['timoshenko_N'] = float(N_val)
+                            metrics['topview_tangential_N_per_m'] = float(N_val)
+                            metrics['topview_radial_line_N_per_m'] = float(radial_line_load)
+                            metrics['topview_normal_pressure_Pa'] = float(p_seam)
+                            metrics['meridional_N_per_m'] = float(N_val)
+                            metrics['normal_pressure_Pa'] = float(p_seam)
+                            if H_mean is not None:
+                                metrics['mean_curvature_at_seam_1_per_m'] = float(H_mean)
+                            # Curvatuurcomponenten en aandelen
+                            try:
+                                metrics['inv_r1_at_seam_1_per_m'] = float(inv_r1)
+                            except Exception:
+                                pass
+                            try:
+                                metrics['inv_r2_at_seam_1_per_m'] = float(inv_r2)
+                            except Exception:
+                                pass
+                            try:
+                                total_inv = float(max((inv_r1 + inv_r2), 0.0))
+                                share_mer = float(inv_r1 / total_inv) if total_inv > 0 else 0.0
+                                share_circ = float(inv_r2 / total_inv) if total_inv > 0 else 0.0
+                                metrics['curvature_share_meridional'] = share_mer
+                                metrics['curvature_share_circumferential'] = share_circ
+                            except Exception:
+                                pass
+                            metrics['z_at_seam_m'] = float(z_seam)
+                            if (R_open or 0.0) > 0.0:
+                                metrics['R_open_m'] = float(R_open)
+                            if equilibrium_residual is not None:
+                                metrics['equilibrium_residual'] = float(equilibrium_residual)
+                except Exception:
+                    pass
+
                 st.session_state.df = df
                 st.session_state.metrics = metrics
                 st.session_state.physical_params = physical_params
@@ -598,6 +701,153 @@ if st.session_state.df is not None:
     with col4:
         if st.session_state.metrics.get('volume_afgekapt', 0) > 0:
             st.metric("Cut volume (m³)", f"{st.session_state.metrics.get('volume_afgekapt', 0):.2f}")
+
+    # Forces (Timoshenko) — diagnostiek op de naad (met hover-tooltips)
+    if st.session_state.physical_params and st.session_state.physical_params.get('model', '') == 'timoshenko':
+        st.markdown("")
+        st.subheader("🧮 Forces (Timoshenko) at opening")
+
+        # Kleine helper voor metric-kaarten met hover (native browser tooltip via title=)
+        def metric_card(label: str, value: str, tooltip: str) -> None:
+            st.markdown(
+                f"""
+                <div class="metric-card" title="{tooltip}">
+                  <div class="metric-label">{label}</div>
+                  <div class="metric-value">{value}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        # Stijlen voor de metric-kaarten
+        st.markdown(
+            """
+            <style>
+              .metric-card {
+                border: 1px solid rgba(148,163,184,0.3);
+                border-radius: 8px;
+                padding: 10px 12px;
+                margin-bottom: 10px;
+              }
+              .metric-label {
+                color: #6b7280;
+                font-size: 0.9rem;
+              }
+              .metric-value {
+                font-size: 1.6rem;
+                font-weight: 600;
+              }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+
+        # Waarden uit metrics
+        phi_deg = float(st.session_state.metrics.get('phi_seam_deg', 0.0))
+        N_mer = float(st.session_state.metrics.get('meridional_N_per_m', 0.0))
+        N_circ = float(st.session_state.metrics.get('topview_tangential_N_per_m', 0.0))
+        q_radial = float(st.session_state.metrics.get('topview_radial_line_N_per_m', 0.0))
+        p_norm = float(st.session_state.metrics.get('topview_normal_pressure_Pa', 0.0))
+        H_mean = float(st.session_state.metrics.get('mean_curvature_at_seam_1_per_m', 0.0))
+        resid = float(st.session_state.metrics.get('equilibrium_residual', 0.0))
+
+        # Minimal, focused view: the six requested forces + one ratio card
+        # Topview
+        st.markdown("")
+        st.subheader("🔭 Topview forces at opening")
+        tv1, tv2, tv3 = st.columns(3)
+        N_circ = float(st.session_state.metrics.get('topview_tangential_N_per_m', 0.0))
+        q_radial = float(st.session_state.metrics.get('topview_radial_line_N_per_m', 0.0))
+        p_norm = float(st.session_state.metrics.get('topview_normal_pressure_Pa', 0.0))
+        with tv1:
+            metric_card(
+                "Tangential N (N/m)", f"{N_circ:.0f}",
+                "Spanning langs de omtrek (topview, groen in je schets). Constant in ons model."
+            )
+        with tv2:
+            metric_card(
+                "Radial line load (N/m)", f"{q_radial:.2f}",
+                "Radiale lijnlast aan de naad: q = N / R_open (N per meter omtrek)."
+            )
+        with tv3:
+            metric_card(
+                "Normal pressure p (Pa)", f"{p_norm:.0f}",
+                "Hydrostatische druk loodrecht op het doek bij de naad: p = ρ · g · (d + z_seam)."
+            )
+
+        # Topview ratios
+        tr1, tr2 = st.columns(2)
+        # q/N = 1/R_open  (1/m). Gebruik N_circ als N.
+        ratio_q_over_N = (q_radial / N_circ) if N_circ not in (0.0, None) else 0.0
+        # p/N (1/m) — in Laplace is p/N = 2H
+        ratio_p_over_N = (p_norm / N_circ) if N_circ not in (0.0, None) else 0.0
+        with tr1:
+            metric_card(
+                "Radial/Tangential (1/m)", f"{ratio_q_over_N:.4f}",
+                "Verhouding q/N. Met q = N/R_open ⇒ q/N = 1/R_open. Een grotere opening geeft een kleinere verhouding."
+            )
+        with tr2:
+            metric_card(
+                "p/N (1/m) ≈ 2H", f"{ratio_p_over_N:.4f}",
+                "Druk per lijnspanning. Volgens 2·N·H = p geldt p/N ≈ 2H. Handige sanity‑check met de kromming."
+            )
+
+        # Cross-section
+        st.markdown("")
+        st.subheader("✂ Cross-section forces at opening")
+        cs1, cs2, cs3 = st.columns(3)
+        N_mer = float(st.session_state.metrics.get('meridional_N_per_m', 0.0))
+        # Use curvature shares to present a single clear ratio tile
+        share_mer = float(st.session_state.metrics.get('curvature_share_meridional', 0.0))
+        share_circ = float(st.session_state.metrics.get('curvature_share_circumferential', 0.0))
+        ratio_text = f"{share_mer*100:.1f}% : {share_circ*100:.1f}%"
+        with cs1:
+            metric_card(
+                "Meridional N (N/m)", f"{N_mer:.0f}",
+                "Membraanspanning langs het profiel (doorsnede, groen in je schets). Constant in ons model."
+            )
+        with cs2:
+            metric_card(
+                "Normal pressure p (Pa)", f"{p_norm:.0f}",
+                "Hydrostatische druk op dezelfde naadlocatie (zelfde p)."
+            )
+        with cs3:
+            metric_card(
+                "Meridional : Circumferential (%)", ratio_text,
+                "Verhouding van krommingsbijdrage aan de drukbalans: (1/r1) : (1/r2)."
+            )
+
+        # Cross-section components (compact): φ, N horizontal, N vertical
+        st.markdown("")
+        cs4, cs5, cs6 = st.columns(3)
+        phi_deg = float(st.session_state.metrics.get('phi_seam_deg', 0.0))
+        N_h = float(st.session_state.metrics.get('meridional_N_horizontal_N_per_m', 0.0))
+        N_v = float(st.session_state.metrics.get('meridional_N_vertical_N_per_m', 0.0))
+        with cs4:
+            metric_card(
+                "φ at seam (deg)", f"{phi_deg:.1f}",
+                "Hellingshoek van het doek bij de opening (doorsnede). 0° is vlak; groter = steiler."
+            )
+        with cs5:
+            metric_card(
+                "N horizontal (N/m)", f"{N_h:.1f}",
+                "Horizontale (radiale) component van meridionale spanning: N·cos(φ)."
+            )
+        with cs6:
+            metric_card(
+                "N vertical (N/m)", f"{N_v:.1f}",
+                "Verticale component van meridionale spanning: N·sin(φ)."
+            )
+
+        # Verhouding N_vert / N_horiz (tan φ)
+        st.markdown("")
+        rrow = st.columns(1)
+        rN = float(st.session_state.metrics.get('ratio_N_vert_over_horiz', 0.0))
+        with rrow[0]:
+            metric_card(
+                "N vertical / horizontal (–)", f"{rN:.3f}",
+                "Verhouding van meridionale componenten: (N·sin(φ)) / (N·cos(φ)) = tan(φ)."
+            )
 
     # Extra: Skin oppervlaktes (mantel + bodem, geen top)
     st.markdown("")
